@@ -1,6 +1,6 @@
 {
   "name": "deeds",
-  "version": "0.1.0",
+  "version": "0.1.1",
   "description": "Deeds: count caps, fixes and tends instead of PRs.",
   "private": true,
   "type": "module",

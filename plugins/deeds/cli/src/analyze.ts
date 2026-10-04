@@ -20,6 +20,8 @@ export const CACHE_ROOT = `${process.env.HOME ?? "/tmp"}/.cache/deeds/classified
 /** Secret-shaped strings recognisable on their own; each whole match is replaced. */
 const SECRET_PATTERNS: RegExp[] = [
   /-----BEGIN [A-Z ]*PRIVATE KEY-----[\s\S]*?-----END [A-Z ]*PRIVATE KEY-----/g,
+  // A key with no END line (the diff was cut, or the hunk stops inside it): everything after BEGIN goes.
+  /-----BEGIN [A-Z ]*PRIVATE KEY-----[\s\S]*$/g,
   /\b(?:AKIA|ASIA)[0-9A-Z]{16}\b/g,
   /\b(?:sk|pk|rk)[-_](?:live|test|proj|ant)?[-_]?[A-Za-z0-9_-]{20,}\b/g,
   /\bgh[pousr]_[A-Za-z0-9]{30,}\b/g,

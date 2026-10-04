@@ -35,6 +35,8 @@ export function parseGithub(target: string): { owner: string; repo: string; url:
   const m = /^(?:https:\/\/)?(?:www\.)?github\.com\/([A-Za-z0-9_.-]+)\/([A-Za-z0-9_.-]+?)(?:\.git)?\/?$/.exec(target.trim());
   if (!m) return null;
   const [, owner, repo] = m as unknown as [string, string, string];
+  // `.` and `..` are legal in the pattern but would walk the clone path out of the cache.
+  if ([owner, repo].some((s) => s === "." || s === "..")) return null;
   return { owner, repo, url: `https://github.com/${owner}/${repo}.git` };
 }
 
