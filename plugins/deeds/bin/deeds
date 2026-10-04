@@ -1,0 +1,34 @@
+#!/bin/sh
+# deeds launcher for the Claude Code plugin. Finds the CLI and runs it with bun.
+# Order: the CLI bundled in this plugin (cli/), the repo this plugin lives in, then the installed copy.
+# To read an API key from a file, use ~/.config/deeds/config.json (see the README).
+# The first run of the bundled CLI installs its locked dependencies with `bun install --frozen-lockfile`.
+# That is the only thing this script ever fetches. Later runs start without touching the network.
+set -e
+if ! command -v bun >/dev/null 2>&1; then
+  echo "deeds: bun is required. See the Install section of the README." >&2
+  exit 1
+fi
+root="$(cd "$(dirname "$0")/.." && pwd)"
+
+# Install the bundled CLI's locked dependencies once, and again only when its lockfile changes.
+ensure_deps() {
+  dir="$1"
+  [ -f "$dir/bun.lock" ] || return 0
+  stamp="$dir/node_modules/.deeds-lock"
+  want="$(cat "$dir/bun.lock" "$dir/package.json" | cksum)"
+  if [ -f "$stamp" ] && [ "$(cat "$stamp")" = "$want" ]; then return 0; fi
+  echo "deeds: installing locked dependencies (first run only)" >&2
+  (cd "$dir" && bun install --frozen-lockfile --production --silent) >&2
+  printf '%s\n' "$want" > "$stamp"
+}
+
+if [ -f "$root/cli/src/cli.ts" ]; then
+  ensure_deps "$root/cli"
+  exec bun "$root/cli/src/cli.ts" "$@"
+fi
+for cli in "$root/../../src/cli.ts" "${DEEDS_HOME:-$HOME/.local/share/deeds}/src/cli.ts"; do
+  if [ -f "$cli" ]; then exec bun "$cli" "$@"; fi
+done
+echo "deeds: CLI not found. See the Install section of the README." >&2
+exit 1

@@ -1,0 +1,8 @@
+{
+  "name": "deeds",
+  "version": "0.1.0",
+  "description": "Measure the work in any repo as caps, fixes and tends. Includes the deeds CLI and a skill that knows how to run it.",
+  "author": { "name": "Daniel Miessler", "url": "https://workdeeds.ai" },
+  "homepage": "https://workdeeds.ai",
+  "keywords": ["deeds", "metrics", "git", "productivity", "ai-coding"]
+}
