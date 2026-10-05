@@ -1,5 +1,4 @@
 import { writeFileSync } from "node:fs";
-import { resolve as resolvePath } from "node:path";
 import pkg from "../../package.json" with { type: "json" };
 import { analyzeRepo, renderReport, type Report } from "../analyze.ts";
 import { renderHtml } from "../html.ts";
@@ -9,6 +8,7 @@ import { type Command, type CommandContext, type CommandResult, DeedsError, EXIT
 import { cloneOrFetch, isRepo } from "../git.ts";
 import { judgeRepo, liveTransport, recordedTransport, repoNameOf, type JevTransport } from "../jev/judge.ts";
 import { vendorModel } from "../model.ts";
+import { checkOutputPath } from "../outpath.ts";
 import { parseAnalyzeArgs, repoSettings, resolveJudge, resolveTarget, toSince, type ResolvedJudge, type ResolvedModel } from "../resolve.ts";
 
 export { toSince };
@@ -35,6 +35,8 @@ export const liveDeps: AnalyzeDeps = {
 /** analyze, with every input resolved through resolve.ts. */
 export async function runAnalyze(ctx: Pick<CommandContext, "args" | "json" | "cwd">, deps: AnalyzeDeps = liveDeps): Promise<CommandResult> {
   const flags = parseAnalyzeArgs(ctx.args);
+  // Checked before any work, so a refused path costs nothing.
+  const htmlOut = flags.html ? checkOutputPath(ctx.cwd, flags.html, "html", flags.allowAnyOutput === true) : undefined;
   const judge = resolveJudge(flags, deps.env);
   const onProgress = ctx.json ? undefined : (done: number, total: number) => {
     if (process.stderr.isTTY) process.stderr.write(`\rjudging commits ${done}/${total}${done === total ? "\n" : ""}`);
@@ -50,8 +52,8 @@ export async function runAnalyze(ctx: Pick<CommandContext, "args" | "json" | "cw
     );
   }
   let text = renderReport(report, wantColor(flags.color, deps.env));
-  if (flags.html) {
-    const out = resolvePath(ctx.cwd, flags.html);
+  if (htmlOut) {
+    const out = htmlOut;
     try {
       writeFileSync(out, renderHtml(report, { version: pkg.version, generated: new Date().toISOString() }));
     } catch (err) {
@@ -101,7 +103,7 @@ export async function analyzeTarget(
 const analyze: Command = {
   name: "analyze",
   summary: "Read a repo's commit history over a window and report its caps, fixes and tends.",
-  usage: "deeds analyze [path | github.com/owner/repo] [--since 90d] [--until <date>] [--mode jev|full] [--vendor anthropic|openai] [--model <id>] [--html <file>] [--color|--no-color] [--json]",
+  usage: "deeds analyze [path | github.com/owner/repo] [--since 90d] [--until <date>] [--mode jev|full] [--vendor anthropic|openai] [--model <id>] [--html <file>] [--allow-any-output] [--color|--no-color] [--json]",
   network: "model+clone",
   run: (ctx) => runAnalyze(ctx),
 };

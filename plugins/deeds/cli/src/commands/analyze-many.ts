@@ -2,6 +2,7 @@ import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { join, resolve as resolvePath } from "node:path";
 import type { Report } from "../analyze.ts";
 import { type Command, type CommandContext, type CommandResult, DeedsError, EXIT, type JsonValue } from "../contract.ts";
+import { checkOutputPath } from "../outpath.ts";
 import { parseAnalyzeArgs, resolveJudge } from "../resolve.ts";
 import { analyzeTarget, liveDeps, type AnalyzeDeps } from "./analyze.ts";
 
@@ -31,6 +32,8 @@ export async function runAnalyzeMany(ctx: Pick<CommandContext, "args" | "json" |
   }
   const flags = parseAnalyzeArgs(rest);
   if (flags.target === ".") throw new DeedsError("usage", "analyze-many needs a list file: one path or github.com URL per line", EXIT.usage);
+  // Checked before any work, so a refused folder costs nothing.
+  const outDir = out ? checkOutputPath(ctx.cwd, out, "dir", flags.allowAnyOutput === true) : undefined;
   const judge = resolveJudge(flags, deps.env);
   const listed = readList(resolvePath(ctx.cwd, flags.target));
   const window = { since: flags.since, ...(flags.until ? { until: flags.until } : {}) };
@@ -46,8 +49,8 @@ export async function runAnalyzeMany(ctx: Pick<CommandContext, "args" | "json" |
       repos.push({ repo: entry, status: "failed", mode: null, report: null, error: err instanceof Error ? err.message : String(err) });
     }
   }
-  if (out) {
-    const dir = resolvePath(ctx.cwd, out);
+  if (outDir) {
+    const dir = outDir;
     mkdirSync(dir, { recursive: true });
     repos.forEach((r, i) => {
       if (r.report) writeFileSync(join(dir, `${String(i + 1).padStart(3, "0")}-${r.repo.replace(/[^A-Za-z0-9._-]+/g, "_").slice(-80)}.json`), JSON.stringify(r.report, null, 2));
@@ -72,7 +75,7 @@ export async function runAnalyzeMany(ctx: Pick<CommandContext, "args" | "json" |
 const analyzeMany: Command = {
   name: "analyze-many",
   summary: "Analyze every repo a list file names and sum their caps, fixes and tends.",
-  usage: "deeds analyze-many <list-file> [--since 90d] [--until <date>] [--mode jev|full] [--out <dir>] [--json]",
+  usage: "deeds analyze-many <list-file> [--since 90d] [--until <date>] [--mode jev|full] [--out <dir>] [--allow-any-output] [--json]",
   network: "model+clone",
   run: (ctx) => runAnalyzeMany(ctx),
 };
