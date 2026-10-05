@@ -25,10 +25,10 @@ ensure_deps() {
 
 if [ -f "$root/cli/src/cli.ts" ]; then
   ensure_deps "$root/cli"
-  exec bun "$root/cli/src/cli.ts" "$@"
+  exec bun --no-env-file "$root/cli/src/cli.ts" "$@"
 fi
 for cli in "$root/../../src/cli.ts" "${DEEDS_HOME:-$HOME/.local/share/deeds}/src/cli.ts"; do
-  if [ -f "$cli" ]; then exec bun "$cli" "$@"; fi
+  if [ -f "$cli" ]; then exec bun --no-env-file "$cli" "$@"; fi
 done
 echo "deeds: CLI not found. See the Install section of the README." >&2
 exit 1

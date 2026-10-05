@@ -1,7 +1,12 @@
 {
   "name": "workdeeds",
-  "owner": { "name": "Daniel Miessler", "url": "https://workdeeds.ai" },
-  "metadata": { "description": "Deeds: measure the work in a repo by what got better, not by how many PRs were opened." },
+  "owner": {
+    "name": "Daniel Miessler",
+    "url": "https://workdeeds.ai"
+  },
+  "metadata": {
+    "description": "Deeds: measure the work in a repo by what got better, not by how many PRs were opened."
+  },
   "plugins": [
     {
       "name": "deeds",

@@ -67,7 +67,7 @@ mv "$STAGE" "$INSTALL_DIR"
 LAUNCHER="$BIN_DIR/deeds"
 cat > "$LAUNCHER" <<LAUNCH
 #!/bin/sh
-exec bun "$INSTALL_DIR/src/cli.ts" "\$@"
+exec bun --no-env-file "$INSTALL_DIR/src/cli.ts" "\$@"
 LAUNCH
 chmod 755 "$LAUNCHER"
 

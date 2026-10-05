@@ -1,0 +1,46 @@
+github.com/danielmiessler/fabric
+window   2026-09-06 to 2026-10-04   208 commits read
+mode     jev on typesafe:jev-1.13.0   331339 input + 34391 output tokens
+
+  18 caps      13 fixes      118 tends
+
+week         caps fixes tends
+2026-07-13   1    0     0
+2026-08-31   1    1     1
+2026-09-07   1    1     2
+2026-09-14   2    0     3
+2026-09-21   7    3     31
+2026-09-28   6    8     81
+
+by author
+Kayvan Sylvan            9 caps    11 fixes   70 tends
+github-actions[bot]      0 caps    0 fixes    34 tends
+aiapienthusiast          1 caps    0 fixes    4 tends
+DennyHo0917              1 caps    1 fixes    2 tends
+ctbaum                   1 caps    1 fixes    1 tends
+jamesf_coder             1 caps    0 fixes    2 tends
+serply                   2 caps    0 fixes    1 tends
+jiweiyeah                1 caps    0 fixes    1 tends
+Anand Hegde              1 caps    0 fixes    1 tends
+Thibault Jaigu           1 caps    0 fixes    0 tends
+Eric Curtin              0 caps    0 fixes    1 tends
+YE                       0 caps    0 fixes    1 tends
+
+caps
+  + claudecode   2ad20de Kayvan Sylvan
+  ^ ollama   2568737 Kayvan Sylvan
+  ^ errors   d3b1ee3 Kayvan Sylvan
+  ^ chatter   9d8d782 Kayvan Sylvan
+  + codeblock   9317265 Anand Hegde
+  - providers config   2febe21 Kayvan Sylvan
+  ^ youtube   299f025 Kayvan Sylvan
+  + plugin registry   36760f5 Kayvan Sylvan
+  + providers config   a524628 Kayvan Sylvan
+  + cors   ab93a23 Kayvan Sylvan
+  + pattern descriptions   5f1a302 Kayvan Sylvan
+  + pattern descriptions   457b0ab Kayvan Sylvan
+  + pattern explanations   35de495 Kayvan Sylvan
+  ^ file manager   e813526 Kayvan Sylvan
+  - file manager   7b18651 Kayvan Sylvan
+
+3 secret-shaped strings were redacted before leaving this machine

@@ -7,13 +7,19 @@ import { createHash } from "node:crypto";
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { classifyCommit, replyUsage, type ModelFn } from "./classify.ts";
-import { classifyFast } from "./fast/classify.ts";
-import { QUESTION_SET_VERSION } from "./fast/questions.ts";
 import { commitDiff, listCommits, type CommitInfo } from "./git.ts";
 import type { Deed } from "./schema.ts";
 import { tallyDeeds, type Tally } from "./totals.ts";
 
-export type AnalyzeMode = "fast" | "full";
+/** full: one full-model read per commit (--mode full); jev: the judgment API, the default (src/jev/judge.ts). */
+export type AnalyzeMode = "full" | "jev";
+/**
+ * Every scheme a cache directory was ever keyed by. `fast` is the retired typed-question mode: its scheme stays
+ * so its old entries keep their own directories and are never served to another mode.
+ */
+export type CacheScheme = AnalyzeMode | "fast";
+/** The question-set version the retired fast mode keyed its cache with. */
+const RETIRED_FAST_SCHEME = "fast:fast-q1";
 
 export const CACHE_ROOT = `${process.env.HOME ?? "/tmp"}/.cache/deeds/classified`;
 
@@ -74,7 +80,7 @@ export interface CommitResult extends CommitInfo {
 
 export interface Report {
   repo: string;
-  /** fast: typed questions and a fixed policy; full: one full-model read per commit. */
+  /** jev: the judgment API, the default; full: one full-model read per commit. */
   mode: AnalyzeMode;
   /** The model the run used, `<vendor>:<model>`. */
   model: string;
@@ -84,7 +90,7 @@ export interface Report {
   tokens: { input: number; output: number };
   /** Model calls this run made. */
   calls: number;
-  /** Fast-mode commits an `unsure` answer sent to the full-model classifier. */
+  /** Kept for the 0.1.0 key set; no current mode escalates, so it is always 0. */
   escalated: number;
   window: { since: string; until: string | null; first: string | null; last: string | null };
   commits: number;
@@ -107,14 +113,20 @@ export function weekOf(iso: string): string {
   return d.toISOString().slice(0, 10);
 }
 
-/** The cache key binds the canon, the model, the mode and, in fast mode, the question set. */
-export function cacheKey(canon: string, modelId: string, mode: AnalyzeMode): string {
-  const scheme = mode === "fast" ? `fast:${QUESTION_SET_VERSION}` : "full";
+/**
+ * The cache key binds the canon, the model (in judgment mode, the judge version), the mode and the question set:
+ * the question-system hash in judgment mode, the retired fast set version for fast, so no mode is served another's.
+ */
+export function cacheKey(canon: string, modelId: string, mode: CacheScheme, systemHash?: string): string {
+  if (mode === "jev" && !/^[0-9a-f]{64}$/.test(systemHash ?? "")) {
+    throw new Error("cacheKey: judgment mode needs the question-system sha256");
+  }
+  const scheme = mode === "jev" ? `jev:${systemHash}` : mode === "fast" ? RETIRED_FAST_SCHEME : "full";
   return createHash("sha256").update(canon).update("\0").update(modelId).update("\0").update(scheme).digest("hex").slice(0, 16);
 }
 
-function cachePath(sha: string, canon: string, modelId: string, mode: AnalyzeMode): string {
-  const key = cacheKey(canon, modelId, mode);
+function cachePath(sha: string, canon: string, modelId: string): string {
+  const key = cacheKey(canon, modelId, "full");
   return join(CACHE_ROOT, key, `${sha}.json`);
 }
 
@@ -138,8 +150,6 @@ export async function analyzeRepo(opts: {
   canon: string;
   model: ModelFn;
   modelId: string;
-  /** Defaults to full, the reference classifier; the CLI passes fast by default. */
-  mode?: AnalyzeMode;
   concurrency?: number;
   onProgress?: ((done: number, total: number) => void) | undefined;
 }): Promise<Report> {
@@ -147,9 +157,7 @@ export async function analyzeRepo(opts: {
   let redactions = 0;
   let cached = 0;
   let done = 0;
-  let escalated = 0;
   let calls = 0;
-  const mode: AnalyzeMode = opts.mode ?? "full";
   const tokens = { input: 0, output: 0 };
   const model: ModelFn = async (req) => {
     calls++;
@@ -160,7 +168,7 @@ export async function analyzeRepo(opts: {
     return reply;
   };
   const results = await pool(commits, opts.concurrency ?? 6, async (c): Promise<CommitResult> => {
-    const path = cachePath(c.sha, opts.canon, opts.modelId, mode);
+    const path = cachePath(c.sha, opts.canon, opts.modelId);
     try {
       if (existsSync(path)) {
         cached++;
@@ -171,14 +179,7 @@ export async function analyzeRepo(opts: {
       if (diff.trim() === "") return { ...c, deeds: [] };
       const clean = redactSecrets(diff);
       redactions += clean.redactions;
-      let deeds: Deed[];
-      if (mode === "fast") {
-        const r = await classifyFast({ files, diff: clean.text }, { canon: opts.canon, model });
-        if (r.escalated) escalated++;
-        deeds = r.deeds;
-      } else {
-        deeds = await classifyCommit({ files, diff: clean.text }, { canon: opts.canon, model });
-      }
+      const deeds = await classifyCommit({ files, diff: clean.text }, { canon: opts.canon, model });
       mkdirSync(join(path, ".."), { recursive: true });
       writeFileSync(path, JSON.stringify(deeds));
       return { ...c, deeds };
@@ -205,12 +206,12 @@ export async function analyzeRepo(opts: {
   }
   return {
     repo: opts.label,
-    mode,
+    mode: "full",
     model: opts.modelId,
     complete: failed.length === 0,
     tokens,
     calls,
-    escalated,
+    escalated: 0,
     window: { since: opts.since, until: opts.until ?? null, first: commits[0]?.date ?? null, last: commits.at(-1)?.date ?? null },
     commits: commits.length,
     judged: results.length - failed.length,
@@ -230,7 +231,7 @@ export function renderReport(r: Report): string {
   const lines = [
     `${r.repo}`,
     `window   ${r.window.first?.slice(0, 10) ?? "-"} to ${r.window.last?.slice(0, 10) ?? "-"}   ${r.commits} commits read${r.cached ? ` (${r.cached} from cache)` : ""}`,
-    `mode     ${r.mode} on ${r.model}   ${r.tokens.input} input + ${r.tokens.output} output tokens${r.escalated ? `   ${r.escalated} sent to a full read` : ""}`,
+    `mode     ${r.mode} on ${r.model}   ${r.tokens.input} input + ${r.tokens.output} output tokens`,
     "",
     `  ${r.totals.cap} caps      ${r.totals.fix} fixes      ${r.totals.tend} tends`,
     "",
