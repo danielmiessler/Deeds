@@ -174,7 +174,9 @@ export const CLONE_ROOT = `${process.env.HOME ?? "/tmp"}/.cache/deeds/repos`;
 /** Options a permitted clone may carry. Anything else (`-c`, `--config`, `--upload-pack`, `--template`, ...) can redirect the URL or run a program. */
 const CLONE_OPTIONS = /^(?:--quiet|-q|--no-tags|--single-branch|--no-checkout|--bare|--filter=blob:none|--depth=\d+)$/;
 /** Options a permitted fetch may carry. */
-const FETCH_OPTIONS = /^(?:--quiet|-q|--no-tags|--prune)$/;
+const FETCH_OPTIONS = /^(?:--quiet|-q|--no-tags|--prune|--refetch)$/;
+/** The two config keys a pre-0.3.1 partial clone is converted by, read or unset only. */
+const PARTIAL_CLONE_KEYS = new Set(["remote.origin.partialclonefilter", "remote.origin.promisor"]);
 /**
  * Git subcommands that only read or reset a local repository. Under analyze's network policy every other
  * git invocation is refused unless `isAllowedGit` passes it, so a fetch hidden in `submodule`, `remote`
@@ -228,6 +230,9 @@ export function isAllowedGit(cmd: unknown, gitHosts: readonly string[]): boolean
     } catch {
       return false;
     }
+  }
+  if (g.sub === "config") {
+    return isCloneDir(g.dir) && g.rest.length === 2 && (g.rest[0] === "--get" || g.rest[0] === "--unset") && PARTIAL_CLONE_KEYS.has(g.rest[1]!);
   }
   if (g.sub === "fetch") {
     return isCloneDir(g.dir) && options.every((o) => FETCH_OPTIONS.test(o)) && positional.every((p) => p === "origin");

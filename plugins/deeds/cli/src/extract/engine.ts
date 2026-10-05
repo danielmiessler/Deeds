@@ -13,15 +13,14 @@ interface Loaded {
   query: Query;
 }
 
-let parser: Parser | undefined;
 const loaded = new Map<string, Promise<Loaded>>();
+// One init for the process. Concurrent extractions used to each run Parser.init, and a second init
+// replaced the wasm module under grammars the first had loaded ("Incompatible language version 0").
+let parserReady: Promise<Parser> | undefined;
 
-async function getParser(): Promise<Parser> {
-  if (!parser) {
-    await Parser.init({ locateFile: () => coreWasm });
-    parser = new Parser();
-  }
-  return parser;
+function getParser(): Promise<Parser> {
+  parserReady ??= Parser.init({ locateFile: () => coreWasm }).then(() => new Parser());
+  return parserReady;
 }
 
 function load(spec: LanguageSpec): Promise<Loaded> {

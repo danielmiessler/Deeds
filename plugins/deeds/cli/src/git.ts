@@ -44,13 +44,21 @@ export function parseGithub(target: string): { owner: string; repo: string; url:
 export function cloneOrFetch(gh: { owner: string; repo: string; url: string }): string {
   const dest = join(CLONE_ROOT, gh.owner, gh.repo);
   if (existsSync(join(dest, ".git"))) {
+    // Clones made before 0.3.1 have no file contents and fetch each diff over the network; fetch them once, whole.
+    const partial = Bun.spawnSync(["git", "-C", dest, "config", "--get", "remote.origin.partialclonefilter"], { stdout: "pipe", stderr: "ignore" });
+    if (partial.exitCode === 0 && partial.stdout.toString().trim()) {
+      Bun.spawnSync(["git", "-C", dest, "config", "--unset", "remote.origin.partialclonefilter"], { stdout: "ignore", stderr: "ignore" });
+      Bun.spawnSync(["git", "-C", dest, "config", "--unset", "remote.origin.promisor"], { stdout: "ignore", stderr: "ignore" });
+      const re = Bun.spawnSync(["git", "-C", dest, "fetch", "--quiet", "--refetch", "origin"], { stdout: "ignore", stderr: "pipe" });
+      if (re.exitCode !== 0) throw new DeedsError("git_failed", `could not fetch the full history of ${gh.owner}/${gh.repo}: ${re.stderr.toString().trim()}`, EXIT.error);
+    }
     const r = Bun.spawnSync(["git", "-C", dest, "fetch", "--quiet", "origin"], { stdout: "ignore", stderr: "pipe" });
     if (r.exitCode !== 0) throw new DeedsError("git_failed", `could not update ${gh.owner}/${gh.repo}: ${r.stderr.toString().trim()}`, EXIT.error);
     Bun.spawnSync(["git", "-C", dest, "reset", "--quiet", "--hard", "origin/HEAD"], { stdout: "ignore", stderr: "ignore" });
     return dest;
   }
   mkdirSync(join(CLONE_ROOT, gh.owner), { recursive: true });
-  const r = Bun.spawnSync(["git", "clone", "--quiet", "--filter=blob:none", gh.url, dest], { stdout: "ignore", stderr: "pipe" });
+  const r = Bun.spawnSync(["git", "clone", "--quiet", gh.url, dest], { stdout: "ignore", stderr: "pipe" });
   if (r.exitCode !== 0) throw new DeedsError("git_failed", `could not clone ${gh.owner}/${gh.repo}: ${r.stderr.toString().trim()}`, EXIT.error);
   return dest;
 }

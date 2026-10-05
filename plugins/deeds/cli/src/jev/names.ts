@@ -78,6 +78,15 @@ export function pathWords(path: string): string {
   return w || words(file) || "capability";
 }
 
+/** Test files and fixtures in the common layouts of the languages deeds reads. */
+export function isTestPath(path: string): boolean {
+  return /(^|\/)(tests?|__tests__|specs?|e2e|fixtures?|testdata|snapshots?)\//i.test(path)
+    || /\.(test|spec)\.[a-z0-9]+$/i.test(path)
+    || /_test\.(go|rs|py)$/i.test(path)
+    || /(^|\/)test_[^/]+\.py$/i.test(path)
+    || /(^|\/)tests?\.rs$/i.test(path);
+}
+
 /** Product paths named by the facts' files text; every path when the text is absent or names none. */
 function productPaths(files: NameInput["files"], filesText: string | undefined): NameInput["files"] {
   if (!filesText) return files;
@@ -98,7 +107,10 @@ export function nameCap(input: NameInput): string {
     const more = ranked.length - 1;
     return more > 0 ? `${boundaryName(top)} and ${more} more` : boundaryName(top);
   }
-  const candidates = productPaths(input.files, input.filesText);
+  const product = productPaths(input.files, input.filesText);
+  // A test file names what was tested, not the capability, so tests name a cap only when nothing else changed.
+  const nonTest = product.filter((f) => !isTestPath(f.path));
+  const candidates = nonTest.length ? nonTest : product;
   const best = [...candidates].sort((a, b) => b.added + b.removed - (a.added + a.removed) || (a.path < b.path ? -1 : 1))[0];
   return best ? pathWords(best.path) : "capability";
 }
