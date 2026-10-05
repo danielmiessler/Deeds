@@ -6,9 +6,9 @@
  * The request carries only the state fields the judge stage reads, each cut to its declared cap, after
  * redaction. A state that still holds a secret shape is never sent: the stage gate reads secret_shape_remaining.
  */
-import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
+import { existsSync, readFileSync, writeFileSync } from "node:fs";
 import { basename, join } from "node:path";
-import { CACHE_ROOT, cacheKey, redactSecrets, weekOf, type CommitResult, type Report } from "../analyze.ts";
+import { CACHE_ROOT, cacheKey, readCached, redactSecrets, weekOf, writeCached, type CommitResult, type Report } from "../analyze.ts";
 import { DeedsError, EXIT } from "../contract.ts";
 import { createModelClient, type FetchLike } from "../egress.ts";
 import { listCommits, MAX_DIFF_BYTES } from "../git.ts";
@@ -318,9 +318,10 @@ export async function judgeRepo(opts: JudgeOptions): Promise<Report> {
   const results = await pool(commits, opts.concurrency ?? DEFAULT_CONCURRENCY, async (c): Promise<CommitResult> => {
     const path = join(cacheDir, `${c.sha}.json`);
     try {
-      if (existsSync(path)) {
+      const hit = readCached(path);
+      if (hit) {
         cached++;
-        return { ...c, deeds: JSON.parse(readFileSync(path, "utf8")) as Deed[] };
+        return { ...c, deeds: hit };
       }
       const { raw, redactions: n } = await rawRecordAsync(opts.repo, opts.repoName, c.sha);
       redactions += n;
@@ -330,8 +331,7 @@ export async function judgeRepo(opts: JudgeOptions): Promise<Report> {
       tokens.input += judged.usage.input;
       tokens.output += judged.usage.output;
       const deeds = judged.deeds;
-      mkdirSync(cacheDir, { recursive: true });
-      writeFileSync(path, JSON.stringify(deeds));
+      writeCached(path, deeds);
       return { ...c, deeds };
     } catch (err) {
       return { ...c, deeds: [], error: err instanceof Error ? err.message : String(err) };
