@@ -48,11 +48,15 @@ const SECRET_CONTEXTS: RegExp[] = [
   /(\b(?:Bearer|Basic|Token)\s+)([A-Za-z0-9._~+/-]{16,}=*)/g,
   // The password inside a URL: scheme://user:<password>@host.
   /(\b[a-z][a-z0-9+.-]*:\/\/[^/\s:@'"]+:)([^@\s/'"]{3,})(?=@)/gi,
+  // The two name=value patterns below are written to stay linear on long identifier runs: the name may only
+  // start where a run of name characters starts, a lookahead checks that the run holds a secret-like word, and
+  // `(?=(...))\2` takes the whole run at once without backtracking into it. They match what
+  // `[A-Za-z0-9_.-]*(?:key|...)[A-Za-z0-9_.-]*` would, without its quadratic retries.
   // A quoted value under a secret-like name: `api_key = "..."`, `"clientSecret": "..."`.
-  /([A-Za-z0-9_.-]*(?:key|secret|token|passw(?:or)?d|pwd|credential|auth|private)[A-Za-z0-9_.-]*["']?\s*[:=]\s*["'`])([^"'`\s]{12,})(?=["'`])/gi,
+  /(?<![A-Za-z0-9_.-])((?=[A-Za-z0-9_.-]*?(?:key|secret|token|passw(?:or)?d|pwd|credential|auth|private))(?=([A-Za-z0-9_.-]+))\2["']?\s*[:=]\s*["'`])([^"'`\s]{12,})(?=["'`])/gi,
   // An unquoted value under a secret-like name (.env files, shell exports, YAML). It must hold a digit, so
   // ordinary code such as `authHeader = buildHeader(...)` is left intact.
-  /([A-Za-z0-9_.-]*(?:key|secret|token|passw(?:or)?d|pwd|credential|auth|private)[A-Za-z0-9_.-]*\s*[:=]\s*)(?=[A-Za-z0-9_+/=.-]*\d)([A-Za-z0-9_+/=.-]{12,})/gi,
+  /(?<![A-Za-z0-9_.-])((?=[A-Za-z0-9_.-]*?(?:key|secret|token|passw(?:or)?d|pwd|credential|auth|private))(?=([A-Za-z0-9_.-]+))\2\s*[:=]\s*)(?=[A-Za-z0-9_+/=.-]*\d)([A-Za-z0-9_+/=.-]{12,})/gi,
 ];
 
 /** Replace every secret-shaped string in `text` before it leaves the machine, and count the replacements. */
