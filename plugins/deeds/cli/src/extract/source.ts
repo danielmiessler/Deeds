@@ -56,8 +56,32 @@ function plausibleSource(text: string): boolean {
   return !(text.length > 20_000 && text.length / lines > 400);
 }
 
+/**
+ * Environment variables that make git read configuration, a repository or helper programs from somewhere other
+ * than the repository it is pointed at. Git config can name programs git runs (core.fsmonitor, a diff or filter
+ * driver), so none of these is passed to the git that reads a source tree.
+ */
+const GIT_ENV_DROP = new Set([
+  "GIT_CONFIG", "GIT_CONFIG_COUNT", "GIT_CONFIG_PARAMETERS", "GIT_CONFIG_GLOBAL", "GIT_CONFIG_SYSTEM",
+  "GIT_DIR", "GIT_WORK_TREE", "GIT_COMMON_DIR", "GIT_INDEX_FILE", "GIT_OBJECT_DIRECTORY", "GIT_ALTERNATE_OBJECT_DIRECTORIES",
+  "GIT_EXEC_PATH", "GIT_TEMPLATE_DIR", "GIT_EXTERNAL_DIFF", "GIT_PAGER", "GIT_EDITOR", "GIT_SSH", "GIT_SSH_COMMAND", "GIT_ASKPASS",
+]);
+
+/** `env` without the variables in GIT_ENV_DROP or any GIT_CONFIG_KEY_<n> / GIT_CONFIG_VALUE_<n>. */
+export function gitEnv(env: Record<string, string | undefined> = process.env): Record<string, string> {
+  const out: Record<string, string> = {};
+  for (const [k, v] of Object.entries(env)) {
+    if (v === undefined) continue;
+    const name = process.platform === "win32" ? k.toUpperCase() : k;
+    if (GIT_ENV_DROP.has(name) || /^GIT_CONFIG_(?:KEY|VALUE)_/.test(name)) continue;
+    out[k] = v;
+  }
+  return out;
+}
+
 function git(root: string, args: string[], input?: Uint8Array): { ok: boolean; out: Buffer; err: string } {
   const p = Bun.spawnSync(["git", "-C", root, ...args], {
+    env: gitEnv(),
     stdout: "pipe",
     stderr: "pipe",
     ...(input ? { stdin: input } : {}),

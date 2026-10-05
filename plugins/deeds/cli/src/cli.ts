@@ -39,9 +39,13 @@ export const COMMANDS_DIR = join(import.meta.dir, "commands");
  */
 export const CLI_BUNFIG = existsSync(join(import.meta.dir, "..", "bunfig.toml")) ? join(import.meta.dir, "..", "bunfig.toml") : "/dev/null";
 
-/** The argv that re-runs this CLI under bun: the config pinned (as one `--config=` argument), then the entry and its arguments. */
+/**
+ * The argv that re-runs this CLI under bun with the launchers' flags: no `.env` loading (the cwd's `.env` would
+ * otherwise set the environment of the child and every git it spawns) and the config pinned (as one `--config=`
+ * argument), then the entry and its arguments.
+ */
 export function reexecArgv(execPath: string, entry: string, argv: string[]): string[] {
-  return [execPath, `--config=${CLI_BUNFIG}`, entry, ...argv];
+  return [execPath, "--no-env-file", `--config=${CLI_BUNFIG}`, entry, ...argv];
 }
 
 const NAME_RE = /^[a-z][a-z0-9-]*$/;
