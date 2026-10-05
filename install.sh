@@ -59,15 +59,19 @@ mkdir -p "$STAGE"
 trap 'rm -rf "$WORK" "$STAGE"' EXIT INT TERM
 tar -xzf "$WORK/$TARBALL" -C "$STAGE" || fail "could not unpack the download"
 [ -f "$STAGE/src/cli.ts" ] && [ -f "$STAGE/bun.lock" ] || fail "the download is not a deeds CLI"
+# An older tarball may not ship the CLI's bunfig.toml; the launcher needs one to point at.
+[ -f "$STAGE/bunfig.toml" ] || printf '# Bun config for the deeds CLI; the launcher pins it with --config.\n' > "$STAGE/bunfig.toml"
 (cd "$STAGE" && bun install --frozen-lockfile --production --silent) || fail "dependency install failed"
 printf '%s\n' "$(cat "$STAGE/bun.lock" "$STAGE/package.json" | cksum)" > "$STAGE/node_modules/.deeds-lock"
 rm -rf "$INSTALL_DIR"
 mv "$STAGE" "$INSTALL_DIR"
 
+# The launcher pins bun's config to the install's own bunfig.toml, so bun never reads one from the
+# directory deeds runs in (usually the repository being analyzed), whose `preload` would run first.
 LAUNCHER="$BIN_DIR/deeds"
 cat > "$LAUNCHER" <<LAUNCH
 #!/bin/sh
-exec bun --no-env-file "$INSTALL_DIR/src/cli.ts" "\$@"
+exec bun --no-env-file --config="$INSTALL_DIR/bunfig.toml" "$INSTALL_DIR/src/cli.ts" "\$@"
 LAUNCH
 chmod 755 "$LAUNCHER"
 

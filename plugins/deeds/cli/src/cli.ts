@@ -31,6 +31,19 @@ import {
 } from "./offline.ts";
 
 export const COMMANDS_DIR = join(import.meta.dir, "commands");
+
+/**
+ * The CLI's own bun config. bun reads `$cwd/bunfig.toml` unless `--config` names another file, and the cwd is
+ * usually the repository being analyzed, whose `preload` entries would run before deeds. Every bun this CLI
+ * starts is pinned to this file; a copy of the CLI without one gets an empty config.
+ */
+export const CLI_BUNFIG = existsSync(join(import.meta.dir, "..", "bunfig.toml")) ? join(import.meta.dir, "..", "bunfig.toml") : "/dev/null";
+
+/** The argv that re-runs this CLI under bun: the config pinned (as one `--config=` argument), then the entry and its arguments. */
+export function reexecArgv(execPath: string, entry: string, argv: string[]): string[] {
+  return [execPath, `--config=${CLI_BUNFIG}`, entry, ...argv];
+}
+
 const NAME_RE = /^[a-z][a-z0-9-]*$/;
 
 /** Discover every `*.ts` command module in `dir`, validated and sorted by name. */
@@ -121,7 +134,7 @@ export async function main(
   if ((cmd.network ?? "none") === "none" && !insideOsSandbox()) {
     if (osSandboxAvailable()) {
       // Re-execute under the OS network denial so spawned children are covered too.
-      const child = Bun.spawn(osSandboxArgv([process.execPath, import.meta.path, ...argv]), {
+      const child = Bun.spawn(osSandboxArgv(reexecArgv(process.execPath, import.meta.path, argv)), {
         cwd,
         stdin: "inherit",
         stdout: "inherit",

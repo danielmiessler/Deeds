@@ -23,12 +23,20 @@ ensure_deps() {
   printf '%s\n' "$want" > "$stamp"
 }
 
+# bun reads $cwd/bunfig.toml unless --config names another file, and the cwd is usually the repository
+# being analyzed; its `preload` entries would run before deeds. So every exec pins the CLI's own config.
+# (`--config=FILE` must be one argument: bun reads `-c FILE` as a bare -c followed by the entry file.)
+# A CLI copy without a bunfig.toml of its own gets an empty config.
+config_for() {
+  if [ -f "$1/bunfig.toml" ]; then printf '%s' "$1/bunfig.toml"; else printf '%s' /dev/null; fi
+}
+
 if [ -f "$root/cli/src/cli.ts" ]; then
   ensure_deps "$root/cli"
-  exec bun --no-env-file "$root/cli/src/cli.ts" "$@"
+  exec bun --no-env-file --config="$(config_for "$root/cli")" "$root/cli/src/cli.ts" "$@"
 fi
 for cli in "$root/../../src/cli.ts" "${DEEDS_HOME:-$HOME/.local/share/deeds}/src/cli.ts"; do
-  if [ -f "$cli" ]; then exec bun --no-env-file "$cli" "$@"; fi
+  if [ -f "$cli" ]; then exec bun --no-env-file --config="$(config_for "$(dirname "$cli")/..")" "$cli" "$@"; fi
 done
 echo "deeds: CLI not found. See the Install section of the README." >&2
 exit 1
