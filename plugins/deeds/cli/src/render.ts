@@ -4,6 +4,7 @@
  * lines, so a change to the layout shows up everywhere at once.
  */
 import type { Report } from "./analyze.ts";
+import { escapeControls } from "./terminal.ts";
 
 export type Style = "plain" | "dim" | "bold" | "head" | "cap" | "fix" | "tend" | "capBold" | "fixBold" | "tendBold" | "warn";
 export interface Seg { t: string; s?: Style }
@@ -168,9 +169,19 @@ const ANSI: Record<Style, string> = {
   warn: `\x1b[1;38;2;${hex(PALETTE.fix)}m`,
 };
 
-/** Plain text, or ANSI colour when `color` is set. */
+const ANSI_RESET = "\x1b[0m";
+
+/** The only escape sequences the text renderer writes; terminal output lets these through and escapes the rest. */
+export const ANSI_SEQUENCES: ReadonlySet<string> = new Set([...Object.values(ANSI).filter(Boolean), ANSI_RESET]);
+
+/**
+ * Plain text, or ANSI colour when `color` is set. Segment text comes from the repository (author names, cap
+ * names), so its control characters are escaped before the renderer adds its own colour codes.
+ */
 export function toText(lines: Line[], color: boolean): string {
-  return lines.map((l) => l.map((g) => (color && g.s && ANSI[g.s] ? `${ANSI[g.s]}${g.t}\x1b[0m` : g.t)).join("").trimEnd()).join("\n");
+  return lines
+    .map((l) => l.map((g) => (color && g.s && ANSI[g.s] ? `${ANSI[g.s]}${escapeControls(g.t)}${ANSI_RESET}` : escapeControls(g.t))).join("").trimEnd())
+    .join("\n");
 }
 
 export const escapeHtml = (s: string) => s.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;").replace(/"/g, "&quot;");

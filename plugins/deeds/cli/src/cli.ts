@@ -21,6 +21,8 @@ import { basename, join } from "node:path";
 import { buildCatalog, type Catalog } from "./catalog.ts";
 import { type Command, type CommandContext, DeedsError, EXIT } from "./contract.ts";
 import { VENDOR_HOSTS } from "./vendors.ts";
+import { ANSI_SEQUENCES } from "./render.ts";
+import { terminalSafe } from "./terminal.ts";
 import {
   ALLOW_UNSANDBOXED_FLAG,
   insideOsSandbox,
@@ -82,8 +84,11 @@ export interface Outcome {
 
 function failure(json: boolean, command: string, code: string, message: string, exit: number): Outcome {
   if (json) return { exit, stdout: JSON.stringify({ ok: false, command, error: { code, message } }) + "\n" };
-  return { exit, stdout: `deeds ${command}: ${message}\n` };
+  // The message can carry repository text (a path, git's stderr), so its control characters are escaped.
+  return { exit, stdout: terminalSafe(`deeds ${command}: ${message}`, NO_SEQUENCES) + "\n" };
 }
+
+const NO_SEQUENCES: ReadonlySet<string> = new Set();
 
 /** Run one command under its network policy and render the outcome. Never throws. */
 export async function runCommand(cmd: Command, ctx: CommandContext): Promise<Outcome> {
@@ -94,7 +99,9 @@ export async function runCommand(cmd: Command, ctx: CommandContext): Promise<Out
   try {
     const result = await cmd.run(ctx);
     if (ctx.json) return { exit: EXIT.ok, stdout: JSON.stringify({ ok: true, command: cmd.name, data: result.data }) + "\n" };
-    return { exit: EXIT.ok, stdout: (result.text ?? JSON.stringify(result.data, null, 2)) + "\n" };
+    // Text output carries repository strings (author names, paths, boundary and cap names): escape every control
+    // character except the renderer's own colour codes.
+    return { exit: EXIT.ok, stdout: terminalSafe(result.text ?? JSON.stringify(result.data, null, 2), ANSI_SEQUENCES) + "\n" };
   } catch (err) {
     if (err instanceof NetworkDeniedError) return failure(ctx.json, cmd.name, err.code, err.message, EXIT.denied);
     if (err instanceof DeedsError) return failure(ctx.json, cmd.name, err.code, err.message, err.exit);
