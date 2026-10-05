@@ -18,6 +18,17 @@ export interface CommitInfo {
 /** Largest diff sent for one commit; the rest is cut and the cut is stated in the diff itself. */
 export const MAX_DIFF_BYTES = 60_000;
 
+/**
+ * Cut a diff to at most MAX_DIFF_BYTES, at the last line break before the limit. Redaction runs after the
+ * cut, and a cut inside a token leaves a head that no longer matches any secret shape (a JWT without its
+ * signature, `ghp_` plus a few characters), so the cut must never split a line.
+ */
+export function cutDiff(diff: string): string {
+  if (diff.length <= MAX_DIFF_BYTES) return diff;
+  const nl = diff.lastIndexOf("\n", MAX_DIFF_BYTES - 1);
+  return nl >= 0 ? diff.slice(0, nl + 1) : "";
+}
+
 function git(repo: string, args: string[]): string {
   const r = Bun.spawnSync(["git", "-C", repo, ...args], { stdout: "pipe", stderr: "pipe" });
   if (r.exitCode !== 0) throw new DeedsError("git_failed", `git ${args[0]} failed: ${r.stderr.toString().trim()}`, EXIT.error);
@@ -89,6 +100,6 @@ export function listCommits(repo: string, since: string, until?: string): Commit
 export function commitDiff(repo: string, sha: string): { files: string[]; diff: string } {
   const files = git(repo, ["show", "--format=", "--name-only", sha]).split("\n").filter(Boolean);
   let diff = git(repo, ["show", "--format=", "--no-color", "--unified=3", sha]);
-  if (diff.length > MAX_DIFF_BYTES) diff = diff.slice(0, MAX_DIFF_BYTES) + `\n... diff cut at ${MAX_DIFF_BYTES} bytes of ${diff.length}\n`;
+  if (diff.length > MAX_DIFF_BYTES) diff = cutDiff(diff) + `... diff cut at ${MAX_DIFF_BYTES} bytes of ${diff.length}\n`;
   return { files, diff };
 }

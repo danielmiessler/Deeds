@@ -11,7 +11,7 @@ import { basename, join } from "node:path";
 import { CACHE_ROOT, cacheKey, redactSecrets, weekOf, type CommitResult, type Report } from "../analyze.ts";
 import { DeedsError, EXIT } from "../contract.ts";
 import { createModelClient, type FetchLike } from "../egress.ts";
-import { listCommits, MAX_DIFF_BYTES } from "../git.ts";
+import { cutDiff, listCommits } from "../git.ts";
 import type { CapChange, Deed } from "../schema.ts";
 import { tallyDeeds } from "../totals.ts";
 import { JEV_ENDPOINT } from "./client.ts";
@@ -160,7 +160,7 @@ function buildRaw(repoName: string, sha: string, parentsOut: string, statusOut: 
     const letter = parts[0]!.charAt(0);
     return { path: parts.at(-1)!, status: STATUS_WORD[letter] ?? "modified", added: counts[i]?.added ?? 0, removed: counts[i]?.removed ?? 0 };
   });
-  const diff = diffOut.length > MAX_DIFF_BYTES ? diffOut.slice(0, MAX_DIFF_BYTES) : diffOut;
+  const diff = cutDiff(diffOut);
   const clean = redactSecrets(diff);
   return { raw: { repo: repoName, sha, parents, files, diff: clean.text }, redactions: clean.redactions };
 }
