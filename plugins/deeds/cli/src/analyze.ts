@@ -5,8 +5,8 @@
  */
 import { reportLines, toText } from "./render.ts";
 import { createHash } from "node:crypto";
-import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
-import { join } from "node:path";
+import { existsSync, mkdirSync, readFileSync, renameSync, rmSync, writeFileSync } from "node:fs";
+import { dirname, join } from "node:path";
 import { classifyCommit, replyUsage, type ModelFn } from "./classify.ts";
 import { commitDiff, listCommits, type CommitInfo } from "./git.ts";
 import type { Deed } from "./schema.ts";
@@ -126,6 +126,30 @@ export function cacheKey(canon: string, modelId: string, mode: CacheScheme, syst
   return createHash("sha256").update(canon).update("\0").update(modelId).update("\0").update(scheme).digest("hex").slice(0, 16);
 }
 
+/**
+ * A commit's cached deeds, or undefined when there are none. An entry that does not parse to a list (a write
+ * cut short by a kill or a full disk) is removed and treated as a miss, so a rerun judges the commit again.
+ */
+export function readCached(path: string): Deed[] | undefined {
+  if (!existsSync(path)) return undefined;
+  try {
+    const deeds: unknown = JSON.parse(readFileSync(path, "utf8"));
+    if (Array.isArray(deeds)) return deeds as Deed[];
+  } catch {
+    // fall through: unreadable entry
+  }
+  rmSync(path, { force: true });
+  return undefined;
+}
+
+/** Write a cache entry whole or not at all: a temp file in the same folder, then a rename over the entry. */
+export function writeCached(path: string, deeds: Deed[]): void {
+  mkdirSync(dirname(path), { recursive: true });
+  const tmp = `${path}.${process.pid}.${Date.now()}.tmp`;
+  writeFileSync(tmp, JSON.stringify(deeds));
+  renameSync(tmp, path);
+}
+
 function cachePath(sha: string, canon: string, modelId: string): string {
   const key = cacheKey(canon, modelId, "full");
   return join(CACHE_ROOT, key, `${sha}.json`);
@@ -171,9 +195,10 @@ export async function analyzeRepo(opts: {
   const results = await pool(commits, opts.concurrency ?? 6, async (c): Promise<CommitResult> => {
     const path = cachePath(c.sha, opts.canon, opts.modelId);
     try {
-      if (existsSync(path)) {
+      const hit = readCached(path);
+      if (hit) {
         cached++;
-        return { ...c, deeds: JSON.parse(readFileSync(path, "utf8")) as Deed[] };
+        return { ...c, deeds: hit };
       }
       const { files, diff } = commitDiff(opts.repo, c.sha);
       // A commit that changes nothing (a clean merge, an empty commit) is judged here: no change, no deeds.
@@ -181,8 +206,7 @@ export async function analyzeRepo(opts: {
       const clean = redactSecrets(diff);
       redactions += clean.redactions;
       const deeds = await classifyCommit({ files, diff: clean.text }, { canon: opts.canon, model });
-      mkdirSync(join(path, ".."), { recursive: true });
-      writeFileSync(path, JSON.stringify(deeds));
+      writeCached(path, deeds);
       return { ...c, deeds };
     } catch (err) {
       return { ...c, deeds: [], error: err instanceof Error ? err.message : String(err) };
