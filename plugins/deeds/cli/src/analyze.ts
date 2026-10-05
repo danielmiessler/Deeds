@@ -7,7 +7,7 @@ import { reportLines, toText } from "./render.ts";
 import { createHash } from "node:crypto";
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
-import { classifyCommit, replyUsage, type ModelFn } from "./classify.ts";
+import { classifyCommit, oneDeedPerKind, replyUsage, type ModelFn } from "./classify.ts";
 import { commitDiff, listCommits, type CommitInfo } from "./git.ts";
 import type { Deed } from "./schema.ts";
 import { tallyDeeds, type Tally } from "./totals.ts";
@@ -253,7 +253,8 @@ export async function analyzeRepo(opts: {
     try {
       if (existsSync(path)) {
         cached++;
-        return { ...c, deeds: JSON.parse(readFileSync(path, "utf8")) as Deed[] };
+        // A result cached before the one-per-kind limit is held to it as well.
+        return { ...c, deeds: oneDeedPerKind(JSON.parse(readFileSync(path, "utf8")) as Deed[]) };
       }
       const { files, diff } = commitDiff(opts.repo, c.sha);
       // A commit that changes nothing (a clean merge, an empty commit) is judged here: no change, no deeds.
