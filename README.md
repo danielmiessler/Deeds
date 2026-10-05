@@ -30,7 +30,11 @@ A real run over all of [github.com/danielmiessler/LifeOS](https://github.com/dan
 
 <p align="center"><img src="examples/lifeos.svg" alt="deeds terminal report for github.com/danielmiessler/LifeOS: 68 caps, 53 fixes, 497 tends, by month, by author, and the newest caps by name" width="760"></p>
 
-Add `--html report.html` and you also get a self-contained page with the same numbers: totals with weekly sparklines, a week-by-week chart, authors and every cap by name. It opens offline and can be mailed as is. The page for this run is [`examples/lifeos.html`](examples/lifeos.html), and the plain-text and JSON forms are beside it.
+Add `--html report.html` and you also get a self-contained page with the same numbers: totals with weekly sparklines, a week-by-week chart, authors and every cap by name. It opens offline and can be mailed as is.
+
+<p align="center"><a href="https://workdeeds.ai/example-report"><img src="examples/lifeos-html.png" alt="The deeds HTML report for github.com/danielmiessler/LifeOS: 68 caps, 53 fixes and 497 tends with weekly sparklines, a week-by-week chart per kind, and a by-author table" width="800"></a></p>
+
+Open [the full page for this run](https://workdeeds.ai/example-report). Its source is [`examples/lifeos.html`](examples/lifeos.html), with the plain-text and JSON forms beside it.
 
 `+` is a new capability, `↑` a deepened one, `↓` a regressed one and `−` a removed one. Cap names come from the code itself: the route, command, UI handler or export the commit added, or else the part of the product it changed most. The full report also has a week-by-week trend and a breakdown by author, and `--json` gives you all of it as one JSON document.
 
