@@ -51,6 +51,14 @@ export function parseGithub(target: string): { owner: string; repo: string; url:
   return { owner, repo, url: `https://github.com/${owner}/${repo}.git` };
 }
 
+/**
+ * The environment for git commands that check files out in a cloned repository. The repository's own
+ * .gitattributes can select a filter driver the user configured globally; git-lfs's smudge then downloads
+ * from the host in the repository's .lfsconfig, which is any host its author likes. Deeds reads only git
+ * objects, never LFS content, so smudging is switched off.
+ */
+const CHECKOUT_ENV = { ...process.env, GIT_LFS_SKIP_SMUDGE: "1" };
+
 /** Clone a GitHub repository into the cache, or fetch it when it is already there. Returns the local path. */
 export function cloneOrFetch(gh: { owner: string; repo: string; url: string }): string {
   const dest = join(CLONE_ROOT, gh.owner, gh.repo);
@@ -63,13 +71,13 @@ export function cloneOrFetch(gh: { owner: string; repo: string; url: string }): 
       const re = Bun.spawnSync(["git", "-C", dest, "fetch", "--quiet", "--refetch", "origin"], { stdout: "ignore", stderr: "pipe" });
       if (re.exitCode !== 0) throw new DeedsError("git_failed", `could not fetch the full history of ${gh.owner}/${gh.repo}: ${re.stderr.toString().trim()}`, EXIT.error);
     }
-    const r = Bun.spawnSync(["git", "-C", dest, "fetch", "--quiet", "origin"], { stdout: "ignore", stderr: "pipe" });
+    const r = Bun.spawnSync(["git", "-C", dest, "fetch", "--quiet", "origin"], { stdout: "ignore", stderr: "pipe", env: CHECKOUT_ENV });
     if (r.exitCode !== 0) throw new DeedsError("git_failed", `could not update ${gh.owner}/${gh.repo}: ${r.stderr.toString().trim()}`, EXIT.error);
-    Bun.spawnSync(["git", "-C", dest, "reset", "--quiet", "--hard", "origin/HEAD"], { stdout: "ignore", stderr: "ignore" });
+    Bun.spawnSync(["git", "-C", dest, "reset", "--quiet", "--hard", "origin/HEAD"], { stdout: "ignore", stderr: "ignore", env: CHECKOUT_ENV });
     return dest;
   }
   mkdirSync(join(CLONE_ROOT, gh.owner), { recursive: true });
-  const r = Bun.spawnSync(["git", "clone", "--quiet", gh.url, dest], { stdout: "ignore", stderr: "pipe" });
+  const r = Bun.spawnSync(["git", "clone", "--quiet", gh.url, dest], { stdout: "ignore", stderr: "pipe", env: CHECKOUT_ENV });
   if (r.exitCode !== 0) throw new DeedsError("git_failed", `could not clone ${gh.owner}/${gh.repo}: ${r.stderr.toString().trim()}`, EXIT.error);
   return dest;
 }
