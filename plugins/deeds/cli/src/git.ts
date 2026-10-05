@@ -11,7 +11,7 @@ export interface CommitInfo {
   sha: string;
   /** Author name after the repo's .mailmap is applied. */
   author: string;
-  /** Author date, ISO 8601. */
+  /** When the commit landed (committer date), ISO 8601. */
   date: string;
 }
 
@@ -64,12 +64,14 @@ export function cloneOrFetch(gh: { owner: string; repo: string; url: string }): 
 }
 
 /**
- * Every commit authored inside the window on the current branch, merges included, oldest first. A merge's
+ * Every commit that landed inside the window on the current branch, merges included, oldest first. A merge's
  * diff (see commitDiff) holds only what the merge itself changed, so a change that arrives through a merge
  * is still counted once, at the commit that made it.
  */
 export function listCommits(repo: string, since: string, until?: string): CommitInfo[] {
-  const args = ["log", "--reverse", "--use-mailmap", `--since=${since}`, "--format=%H%x1f%aN%x1f%aI"];
+  // Dated by when the commit landed (committer date), the same date --since and --until select on, so a
+  // change written long before it merged (a review queue, a rebase) counts in the week it reached the product.
+  const args = ["log", "--reverse", "--use-mailmap", `--since=${since}`, "--format=%H%x1f%aN%x1f%cI"];
   if (until) args.push(`--until=${until}`);
   return git(repo, args)
     .split("\n")

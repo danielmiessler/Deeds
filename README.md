@@ -26,15 +26,15 @@ Renames, reverts and busywork produce no deeds. Commit messages are never read, 
 
 ## What you get
 
-A real run over the last 90 days of [microsoft/TypeScript](https://github.com/microsoft/TypeScript), 396 commits, judged with nothing but a Jev key:
+A real run over the last 90 days of [golang/go](https://github.com/golang/go), 1,051 commits, judged with nothing but a Jev key. Go reviews its changes in Gerrit, so it merged no GitHub pull requests in that time; deeds reads the commits themselves:
 
-<p align="center"><img src="examples/typescript.svg" alt="deeds terminal report for github.com/microsoft/TypeScript over 90 days: 73 caps, 195 fixes, 172 tends, week by week, by author, and the newest caps by name" width="760"></p>
+<p align="center"><img src="examples/go.svg" alt="deeds terminal report for github.com/golang/go over 90 days: 122 caps, 358 fixes, 668 tends, week by week, by author, and the newest caps by name" width="760"></p>
 
 Add `--html report.html` and you also get a self-contained page with the same numbers: totals with weekly sparklines, a week-by-week chart, authors and every cap by name. It opens offline and can be mailed as is.
 
-<p align="center"><a href="https://workdeeds.ai/example-report"><img src="examples/typescript-html.png" alt="The deeds HTML report for microsoft/TypeScript over 90 days: 73 caps, 195 fixes and 172 tends with weekly sparklines, a week-by-week chart per kind, and a by-author table" width="800"></a></p>
+<p align="center"><a href="https://workdeeds.ai/example-report"><img src="examples/go-html.png" alt="The deeds HTML report for golang/go over 90 days: 122 caps, 358 fixes and 668 tends with weekly sparklines, a week-by-week chart per kind, and a by-author table" width="800"></a></p>
 
-Open [the full page for this run](https://workdeeds.ai/example-report). Its source is [`examples/typescript.html`](examples/typescript.html), with the plain-text and JSON forms beside it.
+Open [the full page for this run](https://workdeeds.ai/example-report). Its source is [`examples/go.html`](examples/go.html), with the plain-text and JSON forms beside it.
 
 `+` is a new capability, `↑` a deepened one, `↓` a regressed one and `−` a removed one. Cap names come from the code itself: the route, command, UI handler or export the commit added, or else the part of the product it changed most. The full report also has a week-by-week trend and a breakdown by author, and `--json` gives you all of it as one JSON document.
 
@@ -102,7 +102,7 @@ The terminal report is in colour on a terminal and plain when piped; `--color` a
 
 Every commit is judged by Jev: code reads the diff into exact facts (files touched, routes and commands added or removed, how big the change is), Jev answers a short set of typed questions about it, and a fixed policy turns facts and answers into deeds. In our benchmark on a public repo with 717 commits, Jev judged every commit in about 16 seconds and landed within 10% of a full GPT model's counts for caps, fixes and tends. A first run through the CLI also clones the repo and reads each diff, so it takes longer. `--mode full` is an optional reference mode in which a large model reads each diff in full; it is slower and needs an Anthropic or OpenAI key, and nothing else does.
 
-With `--json` the same run is one JSON document. A recorded one is in [`examples/typescript.json`](examples/typescript.json).
+With `--json` the same run is one JSON document. A recorded one is in [`examples/go.json`](examples/go.json).
 
 Results are cached per commit, so a repeat run makes no calls for commits already judged. A first run costs one Jev call per commit that needs judging; commits code can settle on its own (docs-only, lockfiles, merges, release snapshots) cost nothing.
 
