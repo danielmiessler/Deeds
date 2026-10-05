@@ -90,15 +90,31 @@ export function cloneOrFetch(gh: { owner: string; repo: string; url: string }): 
 export function listCommits(repo: string, since: string, until?: string): CommitInfo[] {
   // Dated by when the commit landed (committer date), the same date --since and --until select on, so a
   // change written long before it merged (a review queue, a rebase) counts in the week it reached the product.
-  const args = ["log", "--reverse", "--use-mailmap", `--since=${since}`, "--format=%H%x1f%aN%x1f%cI"];
+  // The author name comes from the repository (its .mailmap or a commit ident) and may hold any byte but NUL,
+  // the 0x1f separator and newlines included. So records end in NUL (-z), and the two fields git writes in a
+  // fixed shape (sha, date) come first; everything after the second separator is the author.
+  const args = ["log", "-z", "--reverse", "--use-mailmap", `--since=${since}`, "--format=%H%x1f%cI%x1f%aN"];
   if (until) args.push(`--until=${until}`);
-  return git(repo, args)
-    .split("\n")
-    .filter(Boolean)
-    .map((line) => {
-      const [sha, author, date] = line.split("\x1f") as [string, string, string];
-      return { sha, author, date };
-    });
+  return parseCommitRecords(git(repo, args));
+}
+
+const SHA_RE = /^(?:[0-9a-f]{40}|[0-9a-f]{64})$/;
+
+/** Parse NUL-terminated `sha 0x1f date 0x1f author` records, skipping any whose sha or date is not well formed. */
+export function parseCommitRecords(out: string): CommitInfo[] {
+  const commits: CommitInfo[] = [];
+  for (const rec of out.split("\0")) {
+    const record = rec.replace(/^\n/, ""); // git log -z with --format may start a record with the separator newline
+    if (!record) continue;
+    const a = record.indexOf("\x1f");
+    const b = a < 0 ? -1 : record.indexOf("\x1f", a + 1);
+    if (b < 0) continue;
+    const sha = record.slice(0, a);
+    const date = record.slice(a + 1, b);
+    if (!SHA_RE.test(sha) || Number.isNaN(Date.parse(date))) continue;
+    commits.push({ sha, author: record.slice(b + 1), date });
+  }
+  return commits;
 }
 
 /**

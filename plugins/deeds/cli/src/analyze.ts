@@ -182,9 +182,13 @@ export interface Report {
   cached: number;
 }
 
-/** Monday of the ISO week containing `iso`, as YYYY-MM-DD. */
+/** The week key for a commit whose date cannot be read. */
+export const UNDATED_WEEK = "undated";
+
+/** Monday of the ISO week containing `iso`, as YYYY-MM-DD; UNDATED_WEEK when `iso` is not a date, rather than throwing. */
 export function weekOf(iso: string): string {
   const d = new Date(iso);
+  if (Number.isNaN(d.getTime())) return UNDATED_WEEK;
   const day = (d.getUTCDay() + 6) % 7;
   d.setUTCDate(d.getUTCDate() - day);
   return d.toISOString().slice(0, 10);
