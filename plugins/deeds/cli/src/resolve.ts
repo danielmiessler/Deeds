@@ -29,6 +29,10 @@ export interface AnalyzeFlags {
   mode: Mode;
   vendor?: Vendor;
   model?: string;
+  /** Also write a self-contained HTML report to this path. */
+  html?: string;
+  /** Force colour on or off; unset means colour only on a terminal without NO_COLOR. */
+  color?: boolean;
 }
 
 /** Parse analyze's argv. Pure. */
@@ -52,6 +56,9 @@ export function parseAnalyzeArgs(args: string[]): AnalyzeFlags {
       if (v !== "anthropic" && v !== "openai") throw new DeedsError("usage", "--vendor is anthropic or openai", EXIT.usage);
       flags.vendor = v;
     } else if (a === "--model") flags.model = val();
+    else if (a === "--html") flags.html = val();
+    else if (a === "--color") flags.color = true;
+    else if (a === "--no-color") flags.color = false;
     else if (a.startsWith("-")) throw new DeedsError("usage", `unknown option ${a}`, EXIT.usage);
     else flags.target = a;
   }

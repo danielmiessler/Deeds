@@ -1,4 +1,8 @@
+import { writeFileSync } from "node:fs";
+import { resolve as resolvePath } from "node:path";
+import pkg from "../../package.json" with { type: "json" };
 import { analyzeRepo, renderReport, type Report } from "../analyze.ts";
+import { renderHtml } from "../html.ts";
 import { loadCanon } from "../canon.ts";
 import type { ModelFn } from "../classify.ts";
 import { type Command, type CommandContext, type CommandResult, DeedsError, EXIT, type JsonValue } from "../contract.ts";
@@ -45,7 +49,25 @@ export async function runAnalyze(ctx: Pick<CommandContext, "args" | "json" | "cw
       EXIT.error,
     );
   }
-  return { data: report as unknown as JsonValue, text: renderReport(report) };
+  let text = renderReport(report, wantColor(flags.color, deps.env));
+  if (flags.html) {
+    const out = resolvePath(ctx.cwd, flags.html);
+    try {
+      writeFileSync(out, renderHtml(report, { version: pkg.version, generated: new Date().toISOString() }));
+    } catch (err) {
+      throw new DeedsError("write_failed", `could not write the HTML report to ${out}: ${err instanceof Error ? err.message : String(err)}`, EXIT.error);
+    }
+    text += `\n\nHTML report: ${out}`;
+  }
+  return { data: report as unknown as JsonValue, text };
+}
+
+/** Colour on a terminal, never when piped, NO_COLOR set or TERM=dumb; --color and --no-color win. */
+export function wantColor(flag: boolean | undefined, env: Record<string, string | undefined>, isTTY = Boolean(process.stdout.isTTY)): boolean {
+  if (flag !== undefined) return flag;
+  if (env.NO_COLOR !== undefined && env.NO_COLOR !== "") return false;
+  if (env.TERM === "dumb") return false;
+  return isTTY;
 }
 
 /** Judge one target (a folder or a GitHub URL) over a window with an already resolved judge. Shared by analyze and analyze-many. */
@@ -79,7 +101,7 @@ export async function analyzeTarget(
 const analyze: Command = {
   name: "analyze",
   summary: "Read a repo's commit history over a window and report its caps, fixes and tends.",
-  usage: "deeds analyze [path | github.com/owner/repo] [--since 90d] [--until <date>] [--mode jev|full] [--vendor anthropic|openai] [--model <id>] [--json]",
+  usage: "deeds analyze [path | github.com/owner/repo] [--since 90d] [--until <date>] [--mode jev|full] [--vendor anthropic|openai] [--model <id>] [--html <file>] [--color|--no-color] [--json]",
   network: "model+clone",
   run: (ctx) => runAnalyze(ctx),
 };

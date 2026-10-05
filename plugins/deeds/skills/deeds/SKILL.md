@@ -56,7 +56,7 @@ Lead with the three totals, then the weekly trend, then the caps by name.
 ## CLI reference
 
 ```
-deeds analyze [path | github.com/owner/repo] [--since 90d] [--until <date>] [--mode jev|full] [--vendor anthropic|openai] [--model <id>] [--json]
+deeds analyze [path | github.com/owner/repo] [--since 90d] [--until <date>] [--mode jev|full] [--vendor anthropic|openai] [--model <id>] [--html <file>] [--color|--no-color] [--json]
 deeds analyze-many <list-file> [--since 90d] [--until <date>] [--mode jev|full] [--out <dir>] [--json]   # one path or github.com URL per line; one report per repo plus summed totals
 deeds extract [path] [--rev <commit>] [--json]   # routes, CLI commands, UI handlers and exports
 deeds help --json                                # every command, its usage and exit codes

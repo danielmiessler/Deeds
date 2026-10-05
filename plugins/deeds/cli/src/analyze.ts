@@ -3,6 +3,7 @@
  * totals, a week-by-week series and a per-author breakdown. Results are cached by commit and canon, so a
  * second run over the same window makes no model calls and returns the same deeds.
  */
+import { reportLines, toText } from "./render.ts";
 import { createHash } from "node:crypto";
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
@@ -225,33 +226,7 @@ export async function analyzeRepo(opts: {
   };
 }
 
-/** The terminal rendering of a report. */
-export function renderReport(r: Report): string {
-  const pad = (s: string | number, n: number) => String(s).padEnd(n);
-  const lines = [
-    `${r.repo}`,
-    `window   ${r.window.first?.slice(0, 10) ?? "-"} to ${r.window.last?.slice(0, 10) ?? "-"}   ${r.commits} commits read${r.cached ? ` (${r.cached} from cache)` : ""}`,
-    `mode     ${r.mode} on ${r.model}   ${r.tokens.input} input + ${r.tokens.output} output tokens`,
-    "",
-    `  ${r.totals.cap} caps      ${r.totals.fix} fixes      ${r.totals.tend} tends`,
-    "",
-  ];
-  if (r.weeks.length) {
-    lines.push("week         caps fixes tends");
-    for (const w of r.weeks) lines.push(`${pad(w.week, 12)} ${pad(w.cap, 4)} ${pad(w.fix, 5)} ${w.tend}`);
-    lines.push("");
-  }
-  if (r.authors.length) {
-    lines.push("by author");
-    for (const a of r.authors.slice(0, 12)) lines.push(`${pad(a.author, 24)} ${pad(a.cap + " caps", 9)} ${pad(a.fix + " fixes", 10)} ${a.tend} tends`);
-    lines.push("");
-  }
-  if (r.caps.length) {
-    lines.push("caps");
-    for (const c of r.caps.slice(-15)) lines.push(`  ${c.change === "new" ? "+" : c.change === "deepened" ? "^" : "-"} ${c.name}   ${c.sha} ${c.author}`);
-    lines.push("");
-  }
-  if (r.failed.length) lines.push(`INCOMPLETE: ${r.failed.length} commits could not be judged, so these totals are a lower bound (first: ${r.failed[0]!.sha} ${r.failed[0]!.error})`);
-  if (r.redactions) lines.push(`${r.redactions} secret-shaped strings were redacted before leaving this machine`);
-  return lines.join("\n").trimEnd();
+/** The terminal rendering of a report: plain, or ANSI colour when `color` is set. */
+export function renderReport(r: Report, color = false): string {
+  return toText(reportLines(r), color);
 }

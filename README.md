@@ -26,51 +26,13 @@ Renames, reverts and busywork produce no deeds. Commit messages are never read, 
 
 ## What you get
 
-An excerpt of a real run over the last 30 days of [fabric](https://github.com/danielmiessler/fabric), made on 2026-10-04 with nothing but a Jev key. All 208 commits were judged in under a minute:
+A real run over all of [github.com/danielmiessler/LifeOS](https://github.com/danielmiessler/LifeOS), 717 commits, judged with nothing but a Jev key:
 
-```
-$ deeds analyze github.com/danielmiessler/fabric --since 30d
+<p align="center"><img src="examples/lifeos.svg" alt="deeds terminal report for github.com/danielmiessler/LifeOS: 68 caps, 53 fixes, 497 tends, by month, by author, and the newest caps by name" width="760"></p>
 
-github.com/danielmiessler/fabric
-window   2026-09-06 to 2026-10-04   208 commits read
-mode     jev on typesafe:jev-1.13.0   331339 input + 34391 output tokens
+Add `--html report.html` and you also get a self-contained page with the same numbers: totals with weekly sparklines, a week-by-week chart, authors and every cap by name. It opens offline and can be mailed as is. The page for this run is [`examples/lifeos.html`](examples/lifeos.html), and the plain-text and JSON forms are beside it.
 
-  18 caps      13 fixes      118 tends
-
-week         caps fixes tends
-2026-07-13   1    0     0
-2026-08-31   1    1     1
-2026-09-07   1    1     2
-2026-09-14   2    0     3
-2026-09-21   7    3     31
-2026-09-28   6    8     81
-
-by author
-Kayvan Sylvan            9 caps    11 fixes   70 tends
-github-actions[bot]      0 caps    0 fixes    34 tends
-aiapienthusiast          1 caps    0 fixes    4 tends
-DennyHo0917              1 caps    1 fixes    2 tends
-ctbaum                   1 caps    1 fixes    1 tends
-jamesf_coder             1 caps    0 fixes    2 tends
-serply                   2 caps    0 fixes    1 tends
-jiweiyeah                1 caps    0 fixes    1 tends
-Anand Hegde              1 caps    0 fixes    1 tends
-Thibault Jaigu           1 caps    0 fixes    0 tends
-Eric Curtin              0 caps    0 fixes    1 tends
-YE                       0 caps    0 fixes    1 tends
-
-caps
-  + claudecode   2ad20de Kayvan Sylvan
-  ^ ollama   2568737 Kayvan Sylvan
-  ^ errors   d3b1ee3 Kayvan Sylvan
-  ^ chatter   9d8d782 Kayvan Sylvan
-  + codeblock   9317265 Anand Hegde
-  - providers config   2febe21 Kayvan Sylvan
-  ^ youtube   299f025 Kayvan Sylvan
-  ...
-```
-
-`+` is a new capability, `^` a deepened one and `-` a removed one. Cap names come from the code itself: the route, command, UI handler or export the commit added, or else the part of the product it changed most. The full report also has a week-by-week trend and a breakdown by author, and `--json` gives you all of it as one JSON document.
+`+` is a new capability, `↑` a deepened one, `↓` a regressed one and `−` a removed one. Cap names come from the code itself: the route, command, UI handler or export the commit added, or else the part of the product it changed most. The full report also has a week-by-week trend and a breakdown by author, and `--json` gives you all of it as one JSON document.
 
 ## Install
 
@@ -112,7 +74,7 @@ The first run installs the CLI's locked dependencies with `bun install --frozen-
 ## Usage
 
 ```sh
-deeds analyze [path | github.com/owner/repo] [--since 90d] [--until <date>] [--mode jev|full] [--vendor anthropic|openai] [--model <id>] [--json]
+deeds analyze [path | github.com/owner/repo] [--since 90d] [--until <date>] [--mode jev|full] [--vendor anthropic|openai] [--model <id>] [--html <file>] [--color|--no-color] [--json]
 deeds analyze-many <list-file> [--since 90d] [--until <date>] [--mode jev|full] [--out <dir>] [--json]
 deeds extract [path] [--rev <commit>] [--json]
 deeds help --json
@@ -127,13 +89,16 @@ export TYPESAFE_API_KEY=...
 deeds analyze . --since 30d
 deeds analyze github.com/owner/repo --since all
 deeds analyze-many repos.txt --since 90d --out reports/
+deeds analyze . --since 6m --html report.html
 ```
+
+The terminal report is in colour on a terminal and plain when piped; `--color` and `--no-color` override that, and `NO_COLOR` is honoured. A long window is shown by month instead of by week.
 
 `analyze-many` takes a file with one local path or github.com URL per line (blank lines and `#` comments are skipped) and writes one JSON report per repo, plus totals across all of them.
 
-Every commit is judged by Jev: code reads the diff into exact facts (files touched, routes and commands added or removed, how big the change is), Jev answers a short set of typed questions about it, and a fixed policy turns facts and answers into deeds. On a public repo with 717 commits that takes about 16 seconds and lands within 10% of a full GPT model's counts for caps, fixes and tends. `--mode full` is an optional reference mode in which a large model reads each diff in full; it is slower and needs an Anthropic or OpenAI key, and nothing else does.
+Every commit is judged by Jev: code reads the diff into exact facts (files touched, routes and commands added or removed, how big the change is), Jev answers a short set of typed questions about it, and a fixed policy turns facts and answers into deeds. In our benchmark on a public repo with 717 commits, Jev judged every commit in about 16 seconds and landed within 10% of a full GPT model's counts for caps, fixes and tends. A first run through the CLI also clones the repo and reads each diff, so it takes longer. `--mode full` is an optional reference mode in which a large model reads each diff in full; it is slower and needs an Anthropic or OpenAI key, and nothing else does.
 
-With `--json` the same run is one JSON document. A recorded one is in [`examples/fabric-30d.json`](examples/fabric-30d.json).
+With `--json` the same run is one JSON document. A recorded one is in [`examples/lifeos.json`](examples/lifeos.json).
 
 Results are cached per commit, so a repeat run makes no calls for commits already judged. A first run costs one Jev call per commit that needs judging; commits code can settle on its own (docs-only, lockfiles, merges, release snapshots) cost nothing.
 
