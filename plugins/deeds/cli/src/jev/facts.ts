@@ -35,7 +35,7 @@
  * Repository settings never live in this file: which repositories are excluded, which kind a repository is, and
  * what its users do with it come from the caller (the user's deeds config), all empty by default.
  */
-import { redactSecrets } from "../analyze.ts";
+import { PRIVATE_KEY_BLOCKS, redactSecrets } from "../analyze.ts";
 import { extractFile } from "../extract/engine.ts";
 import { languageOf, type Boundary, type LanguageSpec } from "../extract/languages.ts";
 import { truncateText, type Scalar } from "./policy.ts";
@@ -61,7 +61,10 @@ const SECRET_VALUE_SHAPES: readonly RegExp[] = [
   /\bglpat-[A-Za-z0-9_-]{16,}/,
   /\bAKIA[0-9A-Z]{16}\b/,
   /\bxox[baprs]-[A-Za-z0-9-]{10,}/,
-  /-----BEGIN [A-Z ]*PRIVATE KEY-----/,
+  // Private-key armor headers: PEM and OpenPGP (`... PRIVATE KEY BLOCK-----`), SSH2, PuTTY .ppk.
+  /-----BEGIN [A-Z0-9 ]*PRIVATE KEY(?: BLOCK)?-----/,
+  /---- BEGIN [A-Z0-9 ]*PRIVATE KEY ----/,
+  /PuTTY-User-Key-File-\d+:/,
   /\bAIza[0-9A-Za-z_-]{30,}/,
   /Bearer\s+[A-Za-z0-9._-]{24,}/,
 ];
@@ -77,22 +80,37 @@ const REDACTION_EXTRA_SHAPES: readonly RegExp[] = [
   /\bxoxe(?:\.xox[bp])?-[A-Za-z0-9-]{10,}/,
   /(?<=(?:aws[_ -]?secret[_ -]?(?:access[_ -]?)?key|secret[_ -]?access[_ -]?key)["']?\s*[:=]\s*["']?)[A-Za-z0-9\/+=]{40}(?![A-Za-z0-9\/+=])/i,
 ];
-/** A whole PEM private-key block, or from BEGIN to the end of the text when a cut removed the END line. */
-const PEM_BLOCK = /-----BEGIN [A-Z ]*PRIVATE KEY-----(?:[\s\S]*?-----END [A-Z ]*PRIVATE KEY-----|[\s\S]*$)/g;
-/** A name ending in key, token, secret, password or credential, then `=` or `:`, then a value, JSON spellings included; group 1 keeps the name, the value is replaced. */
-const SECRET_ASSIGNMENT = /(\b[A-Za-z0-9_]*(?:KEY|TOKEN|SECRET|PASSWORD|PASSWD|CREDENTIAL)[A-Za-z0-9_]*(?:\\?["'])?\s*[=:]\s*(?:\\?["'])?)[A-Za-z0-9._/+~-]{12,}/gi;
+/**
+ * A name holding key, token, secret, password or credential, then `=` or `:`, then a value, JSON spellings
+ * included; group 1 keeps the name, the value is replaced. The name is the whole word run from a word boundary,
+ * taken in one step (`(?=(...))\2`) after a lazy lookahead finds the word in it, so a long run with no `=` is
+ * read once instead of retried from every split. It matches what
+ * `\b[A-Za-z0-9_]*(?:KEY|...)[A-Za-z0-9_]*` matched there.
+ */
+export const SECRET_ASSIGNMENT =
+  /(\b(?=[A-Za-z0-9_]*?(?:KEY|TOKEN|SECRET|PASSWORD|PASSWD|CREDENTIAL))(?=([A-Za-z0-9_]+))\2(?:\\?["'])?\s*[=:]\s*(?:\\?["'])?)[A-Za-z0-9._/+~-]{12,}/gi;
 const REDACTION_MARK = "[REDACTED]";
-const GLOBAL_VALUE_SHAPES: readonly RegExp[] = [...SECRET_VALUE_SHAPES, ...REDACTION_EXTRA_SHAPES].map((r) => new RegExp(r.source, r.flags.includes("g") ? r.flags : `${r.flags}g`));
+const ALL_VALUE_SHAPES: readonly RegExp[] = [...SECRET_VALUE_SHAPES, ...REDACTION_EXTRA_SHAPES].map((r) => new RegExp(r.source, r.flags.includes("g") ? r.flags : `${r.flags}g`));
 
 /** `text` with every secret-shaped value replaced: deeds' redaction, then the shapes above. Run it before any cut. */
-function redactSecretValues(text: string): string {
+export function redactSecretValues(text: string): string {
   if (!text) return text;
-  let out = redactSecrets(text).text.replace(PEM_BLOCK, REDACTION_MARK);
-  for (const re of GLOBAL_VALUE_SHAPES) out = out.replace(re, REDACTION_MARK);
+  let out = redactSecrets(text).text;
+  for (const re of PRIVATE_KEY_BLOCKS) out = out.replace(re, REDACTION_MARK);
+  for (const re of ALL_VALUE_SHAPES) out = out.replace(re, REDACTION_MARK);
   return out.replace(SECRET_ASSIGNMENT, (_m, name: string) => name + REDACTION_MARK);
 }
-/** Whether a credential shape is still in `text`. */
-const hasSecretShape = (text: string): boolean => SECRET_VALUE_SHAPES.some((r) => r.test(text));
+/**
+ * Whether a credential shape is still in `text`: any shape the redaction replaces (both lists above, the
+ * private-key headers included), ignoring a match that is or holds the redaction mark itself (the URL-password
+ * shape matches `user:[REDACTED]@host`).
+ */
+export const hasSecretShape = (text: string): boolean =>
+  ALL_VALUE_SHAPES.some((r) => {
+    r.lastIndex = 0;
+    for (const m of text.matchAll(r)) if (!m[0].includes(REDACTION_MARK)) return true;
+    return false;
+  });
 
 // ── Inputs ───────────────────────────────────────────────────────────────────
 

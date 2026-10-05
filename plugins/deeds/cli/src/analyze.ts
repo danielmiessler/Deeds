@@ -24,11 +24,23 @@ const RETIRED_FAST_SCHEME = "fast:fast-q1";
 
 export const CACHE_ROOT = `${process.env.HOME ?? "/tmp"}/.cache/deeds/classified`;
 
+/**
+ * Private-key armor, each block whole from its header through its END line, or through the end of the text when
+ * the END line is missing (the diff was cut, or the hunk stops inside the key). One pattern per format, so a
+ * header with no END line takes the rest of the text in one match instead of rescanning it from every header.
+ * - PEM and OpenPGP: five dashes, BEGIN, a label ending in PRIVATE KEY (OpenPGP adds BLOCK), five dashes.
+ * - SSH2 (RFC 4716 style): the same shape with four dashes and spaces inside them.
+ * - PuTTY .ppk: from `PuTTY-User-Key-File-<n>:` through the `Private-MAC:` line.
+ */
+export const PRIVATE_KEY_BLOCKS: readonly RegExp[] = [
+  /-----BEGIN [A-Z0-9 ]*PRIVATE KEY(?: BLOCK)?-----(?:[\s\S]*?-----END [A-Z0-9 ]*PRIVATE KEY(?: BLOCK)?-----|[\s\S]*$)/g,
+  /---- BEGIN [A-Z0-9 ]*PRIVATE KEY ----(?:[\s\S]*?---- END [A-Z0-9 ]*PRIVATE KEY ----|[\s\S]*$)/g,
+  /PuTTY-User-Key-File-\d+:(?:[\s\S]*?Private-MAC:[^\n]*|[\s\S]*$)/g,
+];
+
 /** Secret-shaped strings recognisable on their own; each whole match is replaced. */
 const SECRET_PATTERNS: RegExp[] = [
-  /-----BEGIN [A-Z ]*PRIVATE KEY-----[\s\S]*?-----END [A-Z ]*PRIVATE KEY-----/g,
-  // A key with no END line (the diff was cut, or the hunk stops inside it): everything after BEGIN goes.
-  /-----BEGIN [A-Z ]*PRIVATE KEY-----[\s\S]*$/g,
+  ...PRIVATE_KEY_BLOCKS,
   /\b(?:AKIA|ASIA)[0-9A-Z]{16}\b/g,
   /\b(?:sk|pk|rk)[-_](?:live|test|proj|ant)?[-_]?[A-Za-z0-9_-]{20,}\b/g,
   /\bgh[pousr]_[A-Za-z0-9]{30,}\b/g,
@@ -42,18 +54,79 @@ const SECRET_PATTERNS: RegExp[] = [
   // JSON Web Tokens: three base64url segments, the first two always starting with an encoded `{"`.
   /\beyJ[A-Za-z0-9_-]{8,}\.eyJ[A-Za-z0-9_-]{8,}\.[A-Za-z0-9_-]{8,}/g,
 ];
-/** Secrets known by their context: group 1 (the name or scheme) is kept, group 2 (the value) is replaced. */
+/**
+ * A password under a password-like name, whatever its length or characters: `DB_PASSWORD=hunter2 x!`,
+ * `password: "pass phrase"`, `DB_PASS=s3cr3t`. The name is the whole run of name characters and must end in
+ * password, passwd, passphrase, or a separate `pass` / `pwd` word (so `bypass`, `compass` and `cwd` do not
+ * count). The value runs to the closing quote or the end of the line. `==`, `===` and `=>` are not assignments.
+ * Like the name=value patterns below, the name is taken in one step (`(?=(...))\2`), so the scan stays linear.
+ */
+const PASSWORD_VALUE =
+  /(?<![A-Za-z0-9_.-])((?=([A-Za-z0-9_.-]+))\2(?<=passw(?:or)?d|passphrase|(?<![A-Za-z0-9])(?:pass|pwd)|[_.-](?:pass|pwd))["']?[ \t]*[:=](?![=>])[ \t]*["'`]?)([^"'`\r\n]+)/gi;
+
+/** Secrets known by their context: group 1 (the name or scheme) is kept, the rest of the match (the value) is replaced. */
 const SECRET_CONTEXTS: RegExp[] = [
   // `Authorization: Bearer <token>`, `Basic <base64>`.
   /(\b(?:Bearer|Basic|Token)\s+)([A-Za-z0-9._~+/-]{16,}=*)/g,
   // The password inside a URL: scheme://user:<password>@host.
   /(\b[a-z][a-z0-9+.-]*:\/\/[^/\s:@'"]+:)([^@\s/'"]{3,})(?=@)/gi,
+  // A password under a password-like name (PASSWORD_VALUE).
+  PASSWORD_VALUE,
+  // The two name=value patterns below are written to stay linear on long identifier runs: the name may only
+  // start where a run of name characters starts, a lookahead checks that the run holds a secret-like word, and
+  // `(?=(...))\2` takes the whole run at once without backtracking into it. They match what
+  // `[A-Za-z0-9_.-]*(?:key|...)[A-Za-z0-9_.-]*` would, without its quadratic retries.
   // A quoted value under a secret-like name: `api_key = "..."`, `"clientSecret": "..."`.
-  /([A-Za-z0-9_.-]*(?:key|secret|token|passw(?:or)?d|pwd|credential|auth|private)[A-Za-z0-9_.-]*["']?\s*[:=]\s*["'`])([^"'`\s]{12,})(?=["'`])/gi,
-  // An unquoted value under a secret-like name (.env files, shell exports, YAML). It must hold a digit, so
-  // ordinary code such as `authHeader = buildHeader(...)` is left intact.
-  /([A-Za-z0-9_.-]*(?:key|secret|token|passw(?:or)?d|pwd|credential|auth|private)[A-Za-z0-9_.-]*\s*[:=]\s*)(?=[A-Za-z0-9_+/=.-]*\d)([A-Za-z0-9_+/=.-]{12,})/gi,
+  /(?<![A-Za-z0-9_.-])((?=[A-Za-z0-9_.-]*?(?:key|secret|token|passw(?:or)?d|pwd|credential|auth|private))(?=([A-Za-z0-9_.-]+))\2["']?\s*[:=]\s*["'`])([^"'`\s]{12,})(?=["'`])/gi,
+  // The unquoted name=value case runs last, in redactUnquoted().
 ];
+
+/**
+ * An unquoted value under a secret-like name (.env files, shell exports, YAML): the name and separator, when at
+ * least 12 value characters follow. The value is the whole run of `[A-Za-z0-9_+/=.-]` after the separator, and it
+ * must hold a digit, so ordinary code such as `authHeader = buildHeader(...)` is left intact. The pattern used to
+ * check the digit with a lookahead that rescanned the value from every `name=` in a long run (`key=key=key=...`);
+ * redactUnquoted() reads the value's end and the next digit from tables built once per text instead.
+ */
+const UNQUOTED_NAME = /(?<![A-Za-z0-9_.-])((?=[A-Za-z0-9_.-]*?(?:key|secret|token|passw(?:or)?d|pwd|credential|auth|private))(?=([A-Za-z0-9_.-]+))\2\s*[:=]\s*)(?=[A-Za-z0-9_+/=.-]{12})/gi;
+const UNQUOTED_VALUE_CHAR = /[A-Za-z0-9_+/=.-]/;
+
+/**
+ * Apply the unquoted name=value rule exactly as the regex
+ * `<name>\s*[:=]\s*(?=[A-Za-z0-9_+/=.-]*\d)([A-Za-z0-9_+/=.-]{12,})` (global, case-insensitive) would: a start whose
+ * value has no digit is given up and the search goes on from the next character, as the regex engine does.
+ */
+function redactUnquoted(text: string, onRedact: () => void): string {
+  const re = new RegExp(UNQUOTED_NAME.source, UNQUOTED_NAME.flags);
+  let m = re.exec(text);
+  if (!m) return text;
+  const n = text.length;
+  // runEnd[i]: end of the value-character run starting at i; nextDigit[i]: first digit at or after i.
+  const runEnd = new Int32Array(n + 1);
+  const nextDigit = new Int32Array(n + 1);
+  runEnd[n] = n;
+  nextDigit[n] = n;
+  for (let i = n - 1; i >= 0; i--) {
+    const c = text[i]!;
+    runEnd[i] = UNQUOTED_VALUE_CHAR.test(c) ? runEnd[i + 1]! : i;
+    nextDigit[i] = c >= "0" && c <= "9" ? i : nextDigit[i + 1]!;
+  }
+  let out = "";
+  let copied = 0;
+  for (; m; m = re.exec(text)) {
+    const p = m.index + m[1]!.length;
+    const end = runEnd[p]!;
+    if (nextDigit[p]! < end) {
+      out += text.slice(copied, p) + "[REDACTED]";
+      copied = end;
+      re.lastIndex = end;
+      onRedact();
+    } else {
+      re.lastIndex = m.index + 1;
+    }
+  }
+  return copied === 0 ? text : out + text.slice(copied);
+}
 
 /** Replace every secret-shaped string in `text` before it leaves the machine, and count the replacements. */
 export function redactSecrets(text: string): { text: string; redactions: number } {
@@ -66,11 +139,14 @@ export function redactSecrets(text: string): { text: string; redactions: number 
     });
   }
   for (const re of SECRET_CONTEXTS) {
-    out = out.replace(re, (_m, head: string) => {
+    out = out.replace(re, (m: string, head: string) => {
+      // A password value an earlier pattern already replaced is not counted twice.
+      if (re === PASSWORD_VALUE && m.slice(head.length) === "[REDACTED]") return m;
       redactions++;
       return `${head}[REDACTED]`;
     });
   }
+  out = redactUnquoted(out, () => redactions++);
   return { text: out, redactions };
 }
 
