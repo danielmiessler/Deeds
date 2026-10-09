@@ -8,8 +8,10 @@ import { createHash } from "node:crypto";
 import { readFileSync } from "node:fs";
 import { join } from "node:path";
 
-/** Hash of the selected design (round r3) the system was ported from; parity tests compare against it. */
+/** Hash of round r3, the design deeds 0.2 to 0.3 shipped; a judgment cached under it is never served to a later system. */
 export const R3_SYSTEM_HASH = "bb19377ee723f10ff90a4e5acedcf5eb36648a1d9815f4f68874feb13def8a7d";
+/** Hash of v4b, the design the workshop selected on 2026-10-08 and deeds 0.4.0 ships; parity tests compare against it. */
+export const V4B_SYSTEM_HASH = "8f517fd16caad50d04b8e2c6fd8538c9a6efa0dd1e7b6265b1c61ed694d28540";
 
 export interface Question {
   id: string;

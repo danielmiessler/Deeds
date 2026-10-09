@@ -35,7 +35,7 @@
  * Repository settings never live in this file: which repositories are excluded, which kind a repository is, and
  * what its users do with it come from the caller (the user's deeds config), all empty by default.
  */
-import { PRIVATE_KEY_BLOCKS, redactSecrets } from "../analyze.ts";
+import { KEY_ARMOR_BLOCKS, redactSecrets } from "../analyze.ts";
 import { extractFile } from "../extract/engine.ts";
 import { languageOf, type Boundary, type LanguageSpec } from "../extract/languages.ts";
 import { truncateText, type Scalar } from "./policy.ts";
@@ -98,7 +98,7 @@ export function redactSecretValues(text: string): string {
   // The name-based rule runs on the raw text first, while every name still stands next to its value; a later
   // rule (a password value running to the end of the line) could otherwise take a neighbouring name with it.
   let out = redactSecrets(text.replace(SECRET_ASSIGNMENT, (_m, name: string) => name + REDACTION_MARK)).text;
-  for (const re of PRIVATE_KEY_BLOCKS) out = out.replace(re, REDACTION_MARK);
+  for (const re of KEY_ARMOR_BLOCKS) out = out.replace(re, REDACTION_MARK);
   for (const re of ALL_VALUE_SHAPES) out = out.replace(re, REDACTION_MARK);
   return out.replace(SECRET_ASSIGNMENT, (_m, name: string) => name + REDACTION_MARK);
 }
@@ -267,7 +267,6 @@ const ext = (p: string): string => { const b = lbase(p); const i = b.lastIndexOf
 const underDir = (p: string, dirs: readonly string[]): boolean => segs(p).slice(0, -1).some((s) => dirs.includes(s));
 
 const VERSION_SEG = /^v?\d+(\.\d+)*([-.][0-9a-z.]+)?$/i;
-/** A path under releases/<version>/: a frozen copy of the product, never live work. */
 export function isSnapshotPath(p: string): boolean {
   const s = p.split("/");
   for (let i = 0; i < s.length - 1; i++) if (/^releases$/i.test(s[i]!) && i + 1 < s.length - 1 && VERSION_SEG.test(s[i + 1]!)) return true;
@@ -293,8 +292,8 @@ const PROSE_EXT = new Set([".md", ".mdx", ".rst", ".adoc", ".txt"]);
 /**
  * Rule (8)'s docs-named files: README*, CHANGELOG* and the rest only when the extension is a prose one or there
  * is none, so CHANGELOG.md, LICENSE and LICENSE-MIT are docs while a live page or module that happens to share the
- * name (src/pages/changelog.astro, src/router/history.ts, todo.tsx) keeps its own class. The three names in
- * DOC_EXACT are matched exactly, in any case.
+ * name (src/pages/changelog.astro, src/router/history.ts, todo.tsx) keeps its own class. DOC_EXACT's file
+ * names are matched exactly.
  */
 export const isDocNamed = (p: string): boolean => {
   const b = lbase(p);
@@ -312,10 +311,15 @@ const CONFIG_NAME = /config|settings|flag|feature|toggle|route|manifest|rewrite|
 const MIXED_CONTENT_ROOTS = ["content", "posts", "_posts", "blog", "articles", "wordlists", "lists", "datasets"];
 const PRODUCT_MD_DIRS = ["skills", "patterns", "prompts", "commands", "agents", "workflows", "hooks", "packs"];
 const PRODUCT_MD_EXT = new Set([".md", ".mdx", ".txt", ".yaml", ".yml", ".hbs", ".template"]);
+const AGENT_FILES = new Set(["claude.md", "agents.md"]);
+const ROOT_DOC_WORD = new Set(["readme", "install", "changelog", "history", "contributing", "license", "security", "isa", "plan", "notes", "todo", "roadmap", "quickstart", "guide", "report", "migration"]);
+const DEPLOY_CONFIG_MODULE = /^(wrangler|[a-z0-9_-]+\.config)\.(ts|mts|cts|js|mjs|cjs)$/;
+/** Build-tool config modules rule (4) does not name; they keep their pre-r2 class (source), since the patch is for deploy and harness configs only. */
+const BUILD_TOOL_CONFIG = /^(tailwind|postcss|svelte|next|nuxt|astro|remix|tsup|unocss|uno|windi|karma|cypress|nodemon|commitlint|lint-staged|metro|drizzle|electron|quasar|vue|angular|ember|gatsby|docusaurus|vuepress|vitepress)\.config\./;
 
 type ClassifyCtx = { kind: RepoKind | null; skillDirs: ReadonlySet<string> };
 
-const inContentRoot = (p: string): boolean => underDir(p, MIXED_CONTENT_ROOTS);
+const inContentRoot = (p: string, _ctx: ClassifyCtx): boolean => underDir(p, MIXED_CONTENT_ROOTS);
 function inProductMarkdownRoot(p: string, ctx: ClassifyCtx): boolean {
   const dir = p.split("/").slice(0, -1);
   for (let i = dir.length; i > 0; i--) if (ctx.skillDirs.has(dir.slice(0, i).join("/").toLowerCase())) return true;
@@ -325,7 +329,7 @@ function inProductMarkdownRoot(p: string, ctx: ClassifyCtx): boolean {
 /**
  * Class one live path, first match wins, rules (1)–(13) of the product_files fact in order.
  * `head` is the first lines of the after-text when visible (generated markers, draft front matter); null when not.
- * Paths no rule names, all three this builder's, not computed_by's:
+ * Paths no rule names, all three this projector's, not computed_by's, and reported:
  *   - git's own housekeeping files (.gitkeep, .keep, .gitmodules, .mailmap, .git-blame-ignore-revs) join rule (4)
  *     by name, beside the .gitignore and .gitattributes that rule (4) already lists: rule (4) holds git
  *     housekeeping that is no more CI or build tooling than an empty .gitkeep is.
@@ -354,20 +358,31 @@ function classify(p: string, ctx: ClassifyCtx, head: string[] | null): FileClass
   // (8) docs
   const atRoot = !p.includes("/");
   if (isDocNamed(p)) return "docs";
+  // r2 classifier patch (prompts repos, both r2 notes): an agent-instruction file (CLAUDE.md, AGENTS.md) at the root,
+  // under a product-markdown root or under .claude/, and a root-level markdown file whose name is not a docs name,
+  // are the product's source. ROOT_DOC_WORD widens rule (8)'s names for this patch only (INSTALL, QUICKSTART, *_GUIDE
+  // from the notes; report, migration and a plan word anywhere in the name, from a prompts repository's root listing).
+  if (kind === "prompts" && (e === ".md" || e === ".mdx")) {
+    if (AGENT_FILES.has(b) && (atRoot || underDir(p, [".claude"]) || inProductMarkdownRoot(p, ctx))) return "source";
+    if (atRoot && !b.slice(0, -e.length).split(/[-_. ]+/).some((w) => ROOT_DOC_WORD.has(w))) return "source";
+  }
   if (kind !== "content" && (underDir(p, DOC_DIRS) || underDir(p, ["examples", "example"]))) return "docs";
   if (kind !== "content" && atRoot && PROSE_EXT.has(e)) return "docs";
   if (PROSE_EXT.has(e)) {
     if (kind === "code") return "docs";
-    if (kind === "mixed" && !inContentRoot(p)) return "docs";
+    if (kind === "mixed" && !inContentRoot(p, ctx)) return "docs";
     if (kind === "prompts" && !inProductMarkdownRoot(p, ctx)) return "docs";
   }
   // (9) product markdown
   if (kind === "prompts" && PRODUCT_MD_EXT.has(e) && inProductMarkdownRoot(p, ctx)) return "source";
   // (10) asset, (11) source
   if (ASSET_EXT.has(e)) return "asset";
+  // r2 classifier patch: a deploy or harness config module (cloudflare.config.ts, bunker.config.ts; the build-tool
+  // configs rule (4) names are already ci_build) is settings the running product reads, so app_config, not source.
+  if (DEPLOY_CONFIG_MODULE.test(b) && !BUILD_TOOL_CONFIG.test(b)) return "app_config";
   if (SOURCE_EXT.has(e)) return "source";
   // (12) app_config, with the content carve-out
-  const contentScope = kind === "content" || (kind === "mixed" && inContentRoot(p));
+  const contentScope = kind === "content" || (kind === "mixed" && inContentRoot(p, ctx));
   if (CONFIG_EXT.has(e) || b === ".env.example" || DEPLOY_MANIFESTS.has(b)) {
     if (contentScope && !DEPLOY_MANIFESTS.has(b) && !underDir(p, CONFIG_DIRS) && !CONFIG_NAME.test(b)) return frontMatterDraft(head) ? "draft" : "content";
     return "app_config";
@@ -400,7 +415,7 @@ const PLUMBING_CLASSES: ReadonlySet<FileClass> = new Set(["generated_vendored", 
  * than a real tree, so the prompts thresholds (3 SKILL.md, 10 patterns/<name>/system.md) are hard to reach;
  * they are applied unchanged.
  *
- * Sample-bias correction (this builder's, not computed_by's): the ratios leave out plumbing paths (classes
+ * Sample-bias correction (this projector's, not computed_by's): the ratios leave out plumbing paths (classes
  * generated_vendored, lockfile, dependency_manifest and ci_build, classified with the kind unknown). A real tree
  * holds a handful of those among hundreds of files, so they barely move its ratios; a sample of three touched
  * paths can be one-third CI config, which would push a plain Worker repo (src/index.ts, wrangler.toml,
@@ -857,7 +872,7 @@ async function boundaryDelta(views: FileView[], x: Extractor, kind: RepoKind | n
  * Line-aware head_tail cut for a field made of whole lines (boundary_delta): keep leading lines within two thirds
  * of `max` and trailing lines within the rest, joined by a code-written count of the lines left out, so the
  * engine never sees half an entry and the last line (the "not extracted" list, when there is one) survives. When
- * no whole line fits on a side, the engine request's character cut (truncateText, head_tail) applies instead.
+ * no whole line fits on a side, the runner's character cut (truncateText, head_tail) applies instead.
  */
 export function cutLines(text: string, max: number, what: string): string {
   if (text.length <= max) return text;
@@ -936,15 +951,7 @@ function renderProductDiff(views: FileView[], entryFiles: Set<string>): { text: 
       parts.push(head.join("\n") + "\n");
       continue;
     }
-    let text = redactSecretValues(v.section.text);
-    if ((v.git === "A" || v.git === "D") && v.section.hunks.length === 1) {
-      const lines = text.split("\n");
-      const at = lines.findIndex((l) => l.startsWith("@@"));
-      const body = lines.slice(at + 1).filter((l, i, arr) => !(i === arr.length - 1 && l === ""));
-      if (at >= 0 && body.length > 60) {
-        text = [...lines.slice(0, at + 1), ...body.slice(0, 40), `[… ${body.length - 50} lines omitted by deeds …]`, ...body.slice(-10)].join("\n") + "\n";
-      }
-    }
+    let text = trimmedSectionText(v.section, v.git);
     if (v.section.truncated) {
       text = text.replace(/\n*$/, "\n") + `[the raw record's diff ends here; the rest of this file's diff is not in it]\n`;
       missingLines += trimmedLineCount(v);
@@ -954,6 +961,204 @@ function renderProductDiff(views: FileView[], entryFiles: Set<string>): { text: 
   }
   return { text: parts.join(""), missingLines, incomplete };
 }
+/** A section's text, secret-redacted, an added or deleted file over 60 lines cut to its first 40 and last 10. */
+function trimmedSectionText(s: Section, git: FileView["git"]): string {
+  const text = redactSecretValues(s.text);
+  if (!((git === "A" || git === "D") && s.hunks.length === 1)) return text;
+  const lines = text.split("\n");
+  const at = lines.findIndex((l) => l.startsWith("@@"));
+  const body = lines.slice(at + 1).filter((l, i, arr) => !(i === arr.length - 1 && l === ""));
+  if (at < 0 || body.length <= 60) return text;
+  return [...lines.slice(0, at + 1), ...body.slice(0, 40), `[… ${body.length - 50} lines omitted by deeds …]`, ...body.slice(-10)].join("\n") + "\n";
+}
+
+/** A product file that existed before the commit and whose text it changes: modified, or renamed/copied from a product path with changes. */
+const editsExisting = (v: FileView): boolean =>
+  isProduct(v) && v.cls !== "asset" &&
+  (v.git === "M" || ((v.git === "R" || v.git === "C") && (v.similarity ?? 100) < 100 && v.srcCls !== null && PRODUCT_CLASSES.has(v.srcCls)));
+
+/**
+ * existing_edits (r2 fixtend notes § 3.2): the hunks of product files that existed before the commit, every hunk with
+ * a removed line first (in file order), then the addition-only hunks, each run of one file's hunks under its own
+ * ---/+++ header; secret-redacted per hunk. Wholly added product files are named in one closing line. A file the raw
+ * record cut short or does not show gets a marker line, as in product_diff.
+ */
+function renderExistingEdits(views: FileView[]): string {
+  const existing = views.filter(editsExisting);
+  const hunks: { v: FileView; h: Hunk; removes: boolean }[] = [];
+  const missing: string[] = [];
+  for (const v of existing) {
+    if (!v.section || !v.visible) missing.push(v.path);
+    for (const h of v.section?.hunks ?? []) hunks.push({ v, h, removes: h.lines.some((l) => l[0] === "-") });
+  }
+  const ordered = [...hunks.filter((x) => x.removes), ...hunks.filter((x) => !x.removes)];
+  const out: string[] = [];
+  let last: FileView | null = null;
+  for (const { v, h } of ordered) {
+    if (v !== last) { out.push(`--- a/${v.oldPath ?? v.path}`, `+++ b/${v.path}`); last = v; }
+    const oldN = h.lines.filter((l) => l[0] === " " || l[0] === "-").length, newN = h.lines.filter((l) => l[0] === " " || l[0] === "+").length;
+    out.push(`@@ -${h.oldStart},${oldN} +${h.newStart},${newN} @@${h.context ? ` ${h.context}` : ""}`, ...h.lines);
+  }
+  if (!existing.length) out.push("none: this commit edits no product file that existed before it");
+  if (missing.length) out.push(`[part or all of the diff of ${missing.length} edited file(s) is not in the raw record: ${missing.join(", ")}]`);
+  const added = views.filter((v) => isProduct(v) && (v.status === "added" || v.status === "published" || (v.git === "C" && !editsExisting(v) && (v.similarity ?? 0) < 100)));
+  if (added.length) out.push(`${added.length} new file(s) omitted: ${added.map((v) => v.path).join(", ")}`);
+  return redactSecretValues(out.join("\n"));
+}
+
+/** docs_diff (r2 fixtend notes § 3.2): the diff of live docs-class files only (snapshots never enter `views`), trimmed and redacted like product_diff. */
+function renderDocsDiff(views: FileView[]): string | null {
+  const docs = views.filter((v) => v.cls === "docs");
+  if (!docs.length) return null;
+  return docs.map((v) => {
+    if (!v.section) return `diff --git a/${v.oldPath ?? v.path} b/${v.path}\n[this file's diff is not in the raw record]\n`;
+    const t = trimmedSectionText(v.section, v.git);
+    return v.section.truncated ? t.replace(/\n*$/, "\n") + `[the raw record's diff ends here; the rest of this file's diff is not in it]\n` : t;
+  }).join("");
+}
+
+// ── Named symbols (symbol_delta, r2 cap notes § 3 Layer 0) ───────────────────
+
+type Sym = { kind: string; name: string; file: string };
+const ECMA_EXT = new Set([".ts", ".tsx", ".mts", ".cts", ".js", ".jsx", ".mjs", ".cjs", ".vue", ".svelte", ".astro"]);
+const FLAG_EXT = new Set([...ECMA_EXT, ".py", ".go", ".rs", ".sh", ".bash", ".zsh"]);
+const ENV_READ = [
+  /\b(?:process\.env|Bun\.env|import\.meta\.env|Deno\.env|(?:c\.|ctx\.|this\.)?env)\.([A-Z][A-Z0-9_]{2,})\b/g,
+  /\b(?:process\.env|Bun\.env|import\.meta\.env|env)\[\s*["'`]([A-Z][A-Z0-9_]{2,})["'`]\s*\]/g,
+  /\b(?:os\.getenv|os\.environ\.get|Deno\.env\.get|os\.Getenv|env::var)\(\s*["'`]([A-Z][A-Z0-9_]{2,})["'`]/g,
+  /\bos\.environ\[\s*["']([A-Z][A-Z0-9_]{2,})["']\s*\]/g,
+];
+const TOOL_CALL = /\b(?:server\.tool|registerTool|\.tool|defineTool)\(\s*["'`]([\w.:-]{2,64})["'`]/g;
+const TOOL_FILE_SIGNAL = /\b(inputSchema|input_schema|registerTool|server\.tool\(|defineTool\(|tools\s*:\s*\[|TOOLS\s*(:[^=]+)?=\s*\[)/;
+
+/**
+ * Named things one line declares, per language, by regex over the line alone (the boundary extractor's tree-sitter
+ * queries name only routes, commands, UI handlers and exports, so the other kinds are read here):
+ * column-0 functions and classes (ECMA incl. arrow-function consts, Python, Go, Rust, shell); SQL CREATE TABLE and
+ * ALTER TABLE … ADD COLUMN in any source file (DROP TABLE / DROP COLUMN on a line are read as removals); agent or
+ * MCP tool registrations (a tool call naming it, or a `name:` key in a file that declares tools); column-0 YAML keys,
+ * TOML tables and keys, and top-level JSON keys (indent ≤ 2, or the shallowest key of a whole file); CSS @media
+ * blocks with their query; quoted CLI flags; env var names read.
+ */
+function lineSymbols(path: string, line: string, ctx: { toolFile: boolean; jsonTop: number }): { kind: string; name: string; drop?: boolean }[] {
+  const e = ext(path), out: { kind: string; name: string; drop?: boolean }[] = [];
+  if (ECMA_EXT.has(e)) {
+    const f = /^(?:export\s+)?(?:default\s+)?(?:declare\s+)?(?:async\s+)?function\*?\s+([A-Za-z_$][\w$]*)/.exec(line)
+      ?? /^(?:export\s+)?(?:const|let|var)\s+([A-Za-z_$][\w$]*)\s*(?::[^=]+)?=\s*(?:async\s+)?(?:function\b|(?:\([^)]*\)|[A-Za-z_$][\w$]*)\s*(?::[^=]+)?=>)/.exec(line);
+    if (f) out.push({ kind: "fn", name: f[1]! });
+    const c = /^(?:export\s+)?(?:default\s+)?(?:abstract\s+)?class\s+([A-Za-z_$][\w$]*)/.exec(line);
+    if (c) out.push({ kind: "class", name: c[1]! });
+  } else if (e === ".py") {
+    const f = /^(?:async\s+)?def\s+([A-Za-z_]\w*)/.exec(line); if (f) out.push({ kind: "fn", name: f[1]! });
+    const c = /^class\s+([A-Za-z_]\w*)/.exec(line); if (c) out.push({ kind: "class", name: c[1]! });
+  } else if (e === ".go") {
+    const f = /^func\s+(?:\(\s*\w*\s*\*?\s*(\w+)[^)]*\)\s*)?([A-Za-z_]\w*)/.exec(line); if (f) out.push({ kind: "fn", name: f[1] ? `${f[1]}.${f[2]}` : f[2]! });
+    const t = /^type\s+([A-Za-z_]\w*)\s+(?:struct|interface)\b/.exec(line); if (t) out.push({ kind: "class", name: t[1]! });
+  } else if (e === ".rs") {
+    const f = /^(?:pub(?:\([^)]*\))?\s+)?(?:async\s+)?(?:unsafe\s+)?fn\s+([A-Za-z_]\w*)/.exec(line); if (f) out.push({ kind: "fn", name: f[1]! });
+    const t = /^(?:pub(?:\([^)]*\))?\s+)?(?:struct|enum|trait)\s+([A-Za-z_]\w*)/.exec(line); if (t) out.push({ kind: "class", name: t[1]! });
+  } else if ([".sh", ".bash", ".zsh"].includes(e)) {
+    const f = /^(?:function\s+)?([A-Za-z_][\w-]*)\s*\(\)\s*\{?\s*$/.exec(line) ?? /^function\s+([A-Za-z_][\w-]*)\s*\{?\s*$/.exec(line);
+    if (f) out.push({ kind: "fn", name: f[1]! });
+  } else if (e === ".yaml" || e === ".yml") {
+    const k = /^([A-Za-z_][\w.-]*)\s*:(\s|$)/.exec(line); if (k) out.push({ kind: "key", name: k[1]! });
+  } else if (e === ".toml") {
+    const t = /^\[\[?\s*([\w.-]+)\s*\]\]?\s*$/.exec(line) ?? /^([A-Za-z_][\w.-]*)\s*=/.exec(line); if (t) out.push({ kind: "key", name: t[1]! });
+  } else if (e === ".json" || e === ".jsonc") {
+    const k = /^([ \t]*)"([^"]{1,80})"\s*:/.exec(line);
+    if (k && k[1]!.replace(/\t/g, "  ").length === ctx.jsonTop) out.push({ kind: "key", name: k[2]! });
+  }
+  if (SOURCE_EXT.has(e)) {
+    for (const m of line.matchAll(/\bcreate\s+(?:virtual\s+)?table\s+(?:if\s+not\s+exists\s+)?["`[]?([\w.]+)/gi)) out.push({ kind: "table", name: m[1]! });
+    for (const m of line.matchAll(/\bdrop\s+table\s+(?:if\s+exists\s+)?["`[]?([\w.]+)/gi)) out.push({ kind: "table", name: m[1]!, drop: true });
+    for (const m of line.matchAll(/\balter\s+table\s+["`[]?([\w.]+)["`\]]?\s+(add|drop)\s+(?:column\s+)?(?:if\s+(?:not\s+)?exists\s+)?["`[]?(\w+)/gi)) out.push({ kind: "column", name: `${m[1]}.${m[3]}`, drop: m[2]!.toLowerCase() === "drop" });
+  }
+  if (SOURCE_EXT.has(e) || e === ".json" || e === ".jsonc") {
+    for (const m of line.matchAll(TOOL_CALL)) out.push({ kind: "tool", name: m[1]! });
+    const n = ctx.toolFile ? /^\s*["']?name["']?\s*:\s*["'`]([\w.:-]{2,64})["'`]/.exec(line) : null;
+    if (n) out.push({ kind: "tool", name: n[1]! });
+    for (const m of line.matchAll(/@media\s+([^{;]+?)\s*(?:\{|$)/g)) out.push({ kind: "@media", name: m[1]!.replace(/\s+/g, " ") });
+  }
+  if (FLAG_EXT.has(e) && !/var\(|setProperty|getPropertyValue/.test(line)) for (const m of line.matchAll(/["'`](--[a-z][a-z0-9-]{1,40})(?=["'`=\s])/g)) out.push({ kind: "flag", name: m[1]! });
+  if (SOURCE_EXT.has(e) || e === ".toml") for (const re of ENV_READ) for (const m of line.matchAll(re)) out.push({ kind: "env", name: m[1]! });
+  return out;
+}
+
+/**
+ * The named things the commit adds and removes across its product files. Per file a name counts as added when an
+ * added line declares it and no removed or context line of that file does, and as removed the other way round; a
+ * DROP on an added line is a removal. Routes and commands come from the boundary extractor's delta (bd), the rest
+ * from lineSymbols. Across files, an added and a removed entry of the same kind and name cancel (a move).
+ */
+function symbolDelta(views: FileView[], bd: BoundaryResult): { added: Sym[]; removed: Sym[] } {
+  const added: Sym[] = [], removed: Sym[] = [];
+  for (const v of views) {
+    if (!isProduct(v) || v.cls === "asset" || !v.section || v.section.binary) continue;
+    const sideOf = (c: string) => v.section!.hunks.flatMap((h) => h.lines.filter((l) => l[0] === c).map((l) => l.slice(1)));
+    const plus = sideOf("+"), minus = sideOf("-"), ctxLines = [...sideOf(" "), ...v.section.hunks.map((h) => h.context).filter(Boolean)];
+    const all = [...plus, ...minus, ...ctxLines];
+    const toolFile = /tool/i.test(v.path) || all.some((l) => TOOL_FILE_SIGNAL.test(l));
+    const keyIndents = all.map((l) => /^([ \t]*)"[^"]{1,80}"\s*:/.exec(l)?.[1]!.replace(/\t/g, "  ").length).filter((n): n is number => n !== undefined);
+    const shallowest = keyIndents.length ? Math.min(...keyIndents) : -1;
+    const jsonTop = v.git === "A" || v.git === "D" || shallowest <= 2 ? shallowest : -1;
+    const lc = { toolFile, jsonTop };
+    const keyOf = (s: { kind: string; name: string }) => `${s.kind}\u0000${s.name}`;
+    const read = (ls: string[]) => ls.flatMap((l) => lineSymbols(v.path, l, lc));
+    const plusS = read(plus), minusS = read(minus);
+    const before = new Set([...minusS.filter((s) => !s.drop), ...read(ctxLines).filter((s) => !s.drop)].map(keyOf));
+    const after = new Set([...plusS.filter((s) => !s.drop), ...read(ctxLines).filter((s) => !s.drop)].map(keyOf));
+    const seen = new Set<string>();
+    for (const s of plusS) {
+      const k = keyOf(s);
+      if (s.drop) { if (!seen.has(`-${k}`)) { seen.add(`-${k}`); removed.push({ kind: s.kind, name: s.name, file: v.path }); } continue; }
+      if (!before.has(k) && !seen.has(`+${k}`)) { seen.add(`+${k}`); added.push({ kind: s.kind, name: s.name, file: v.path }); }
+    }
+    for (const s of minusS) {
+      const k = keyOf(s);
+      if (s.drop) continue; // a DROP the commit deletes is not a declaration of the name
+      if (!after.has(k) && !seen.has(`-${k}`)) { seen.add(`-${k}`); removed.push({ kind: s.kind, name: s.name, file: v.path }); }
+    }
+  }
+  for (const e of bd.added) if (e.kind === "route" || e.kind === "command") added.push({ kind: e.kind, name: e.name, file: e.file });
+  for (const e of bd.removed) if (e.kind === "route" || e.kind === "command") removed.push({ kind: e.kind, name: e.name, file: e.file });
+  // Moves cancel: drop as many same-kind, same-name entries from each side as the other side holds.
+  const key = (s: Sym) => `${s.kind}\u0000${s.name}`;
+  const count = (xs: Sym[]) => { const m = new Map<string, number>(); for (const s of xs) m.set(key(s), (m.get(key(s)) ?? 0) + 1); return m; };
+  const a = count(added), r = count(removed);
+  const keep = (xs: Sym[], other: Map<string, number>) => {
+    const left = new Map(other);
+    return xs.filter((s) => { const n = left.get(key(s)) ?? 0; if (n > 0) { left.set(key(s), n - 1); return false; } return true; });
+  };
+  return { added: keep(added, r), removed: keep(removed, a) };
+}
+
+const renderSym = (sign: "+" | "-", s: Sym): string => `${sign} ${s.kind} ${s.name} (${s.file})`;
+
+/**
+ * added_paths_mirror_existing over the paths the raw record shows existed before the commit (modified and deleted
+ * paths, rename and copy sources; the parent tree itself is not in the record): an added product path mirrors one
+ * when it equals a known-before path ignoring case, or sits under a directory that is a case-variant of a
+ * known-before directory (install/TOOLS beside install/Tools). True when at least half the added product paths do.
+ */
+function mirrorsExisting(views: FileView[]): boolean {
+  const addedProd = views.filter((v) => isProduct(v) && v.git === "A");
+  if (!addedProd.length) return false;
+  const known = views.flatMap((v) => (v.git === "A" ? [] : v.oldPath ? [v.oldPath, ...(v.git === "C" ? [v.path] : [])] : v.git === "D" || v.git === "M" ? [v.path] : []));
+  const knownLower = new Set(known.map((p) => p.toLowerCase()));
+  const knownDirs = new Map<string, Set<string>>(); // lower-cased dir -> exact spellings
+  for (const p of known) {
+    const s = p.split("/");
+    for (let i = 1; i < s.length; i++) { const d = s.slice(0, i).join("/"); const set = knownDirs.get(d.toLowerCase()) ?? new Set(); set.add(d); knownDirs.set(d.toLowerCase(), set); }
+  }
+  const mirrors = addedProd.filter((v) => {
+    if (knownLower.has(v.path.toLowerCase())) return true;
+    const s = v.path.split("/");
+    for (let i = 1; i < s.length; i++) { const d = s.slice(0, i).join("/"); const spell = knownDirs.get(d.toLowerCase()); if (spell && !spell.has(d)) return true; }
+    return false;
+  }).length;
+  return mirrors * 2 >= addedProd.length;
+}
+
 /** Diff lines a missing or cut file would add to the product diff after the per-file trim (estimate). */
 const trimmedLineCount = (v: FileView): number => {
   const n = v.raw.added + v.raw.removed;
@@ -1001,12 +1206,12 @@ function survivesIgnoreWhitespace(v: FileView): boolean {
   return false;
 }
 
-// ── One commit ───────────────────────────────────────────────────────────────
+// ── One commit ─────────────────────────────────────────────────────────────────
 
 /**
  * The facts and state for one commit. `kind` is the repository's kind (resolveRepoKind), or null when unknown
  * (the classifier then reads the repository as mixed). `stateFields` are the question system's declared state
- * fields with their caps; every field returned is declared there and within its cap.
+ * fields with their caps; every field returned is declared there (or in EXTRA_STATE) and within its cap.
  */
 export async function computeFacts(raw: RawRecord, kind: RepoKind | null, stateFields: StateFields, opts: FactsOptions = {}): Promise<CommitFacts> {
   const x = EXTRACTOR;
@@ -1038,6 +1243,10 @@ export async function computeFacts(raw: RawRecord, kind: RepoKind | null, stateF
     product.length >= 1 &&
     product.every((v) => (v.cls === "content" || v.cls === "asset") && (v.status === "modified" || (v.status === "renamed" && (v.similarity ?? 100) < 100))) &&
     itemsAdded === 0 && itemsRemoved === 0;
+  // docs_changed / tests_changed: any changed live path (snapshot paths already left out of `live`) the classifier above
+  // puts in the docs / test class. Extra facts beyond the declared set: system files declare them separately.
+  const docsChanged = live.some((v) => v.cls === "docs");
+  const testsChanged = live.some((v) => v.cls === "test");
   const dependencyChanged = live.some((v) => v.cls === "dependency_manifest" || v.cls === "lockfile");
   const toolingChanged = live.some((v) => v.cls === "ci_build");
   // Vacuous facts read false with no product file; product_files ≤ 0 settles every decision before they are read.
@@ -1060,7 +1269,7 @@ export async function computeFacts(raw: RawRecord, kind: RepoKind | null, stateF
    * copy_detection_skipped: git warns when creations × candidate sources pass diff.renameLimit² (20000² = 4e8).
    * With --find-copies-harder the sources are the parent's whole tree, which the raw record does not carry;
    * assuming a tree of at most 100,000 files, the warning needs at least 4,000 created files. Under that it is
-   * false; at or over it the builder cannot tell and returns null.
+   * false; at or over it the projector cannot tell and returns null.
    */
   const created = live.filter((v) => v.git === "A" || v.git === "C").length;
   const copyDetectionSkipped: boolean | null = created < 4000 ? false : null;
@@ -1084,8 +1293,9 @@ export async function computeFacts(raw: RawRecord, kind: RepoKind | null, stateF
   if (userSurfaceTouched === null && bd.extracted) notes.push(`user_surface_touched null: not shown whole, no entry point visible: ${bd.entryUnknown.join(", ")}`);
 
   // ── state ──
-  const product_statement = settingFor(opts.repoProducts, raw.repo);
-  const profile = [kind ? KIND_SENTENCE[kind] : "", product_statement ? `Its users ${product_statement}` : ""].filter(Boolean).join(" ");
+  const productStatement = settingFor(opts.repoProducts, raw.repo);
+  const fieldOf = (k: string): StateField => { const f = stateFields[k] ?? EXTRA_STATE[k]; invariant(f, `state field ${k} has no cap`); return f; };
+  const profile = [kind ? KIND_SENTENCE[kind] : "", productStatement ? `Its users ${productStatement}` : ""].filter(Boolean).join(" ");
   const files = redactSecretValues(renderFiles(live, caps.files));
   const entryFiles = new Set([...bd.added, ...bd.removed].map((e) => e.file));
   const pd = renderProductDiff(live, entryFiles);
@@ -1101,10 +1311,17 @@ export async function computeFacts(raw: RawRecord, kind: RepoKind | null, stateF
   };
   const titles = testTitles(live);
   if (titles !== null) state.test_titles = titles;
-  // Every declared field at or under its cap, cut the way the engine request cuts it (truncateText, the field's mode).
+  // r2 state fields (EXTRA_STATE): symbol_delta, existing_edits, and docs_diff when a docs file changed.
+  const sd = symbolDelta(live, bd);
+  const symbolLines = [...sd.removed.map((s) => renderSym("-", s)), ...sd.added.map((s) => renderSym("+", s))];
+  state.symbol_delta = cutLines(redactSecretValues(symbolLines.length ? symbolLines.join("\n") : "none"), fieldOf("symbol_delta").max_chars, "symbol line(s)");
+  state.existing_edits = renderExistingEdits(live);
+  const docsDiff = renderDocsDiff(live);
+  if (docsDiff !== null) state.docs_diff = docsDiff;
+  // Every declared field at or under its cap, cut the way the runner would cut it (truncateText, the field's mode).
   for (const [k, v] of Object.entries(state)) {
-    const field = stateFields[k];
-    invariant(field, `state field ${k} is not declared in system.json`);
+    const field = stateFields[k] ?? EXTRA_STATE[k];
+    invariant(field, `state field ${k} is not declared in system.json nor in EXTRA_STATE`);
     if (v.length > field.max_chars) {
       notes.push(`state.${k} cut from ${v.length} to ${field.max_chars} characters (${field.truncate ?? "head"})`);
       state[k] = truncateText(v, field.max_chars, field.truncate ?? "head");
@@ -1134,6 +1351,35 @@ export async function computeFacts(raw: RawRecord, kind: RepoKind | null, stateF
 
   const secretShapeRemaining = hasSecretShape(JSON.stringify(state));
 
+  // ── r2 layer-0 facts (r2 cap notes § 3, r2 fixtend notes § 3.1) ──
+  /** tables_created: CREATE TABLE statements in added lines of added migration files (.sql, or under a migrations directory). */
+  const tablesCreated = live.filter((v) => v.git === "A" && v.section && (ext(v.path) === ".sql" || underDir(v.path, ["migrations", "migration", "migrate"])))
+    .reduce((n, v) => n + addedLines(v.section!).reduce((m, l) => m + (l.match(/\bcreate\s+(?:virtual\s+)?table\b/gi)?.length ?? 0), 0), 0);
+  /** product_files_deleted: product-class files leaving the product as deleted (a rename out of the product included), archived excluded. */
+  const productFilesDeleted = live.filter((v) => v.status === "deleted" && (v.git === "D" ? isProduct(v) : v.srcCls !== null && PRODUCT_CLASSES.has(v.srcCls))).length;
+  const prodAdded = product.reduce((n, v) => n + v.raw.added, 0), prodRemoved = product.reduce((n, v) => n + v.raw.removed, 0);
+  /** edit_shape over the product files that existed before (editsExisting), by their raw line counts. */
+  const existingEdited = product.filter(editsExisting);
+  const editShape: EditShape | null = product.length === 0 ? null
+    : existingEdited.some((v) => v.raw.removed >= 1) ? "changes_existing_lines"
+    : existingEdited.some((v) => v.raw.added >= 1) ? "additions_in_existing" : "new_files_only";
+  const tests = live.filter((v) => v.cls === "test");
+  const testsShape: TestsShape = !tests.length ? "none" : tests.every((v) => v.git === "A") ? "new_test_files_only" : "existing_tests_changed";
+  const newFacts: Record<string, Scalar | null> = {
+    tables_created: tablesCreated,
+    product_files_deleted: productFilesDeleted,
+    named_symbols_removed: sd.removed.length,
+    deletion_dominant: prodRemoved >= 15 && prodRemoved >= 2 * prodAdded,
+    added_paths_mirror_existing: mirrorsExisting(live),
+    edit_shape: editShape,
+    assets_changed: product.some((v) => v.cls === "asset") && product.some((v) => v.cls !== "asset"),
+    config_only: product.length >= 1 && product.every((v) => v.cls === "app_config"),
+    tests_shape: testsShape,
+  };
+  invariant(newFacts.named_symbols_removed === symbolLines.filter((l) => l.startsWith("- ")).length, "named_symbols_removed disagrees with symbol_delta's removal lines");
+  invariant(editShape === null || EDIT_SHAPES.includes(editShape), `edit_shape ${editShape} outside its enum`);
+  invariant(Object.keys(newFacts).every((k) => EXTRA_FACTS.has(k)), "an r2 fact is missing from EXTRA_FACTS");
+
   const facts: Record<string, Scalar | null> = {
     repo_excluded: repoExcluded,
     snapshot_only: snapshotOnly,
@@ -1159,8 +1405,28 @@ export async function computeFacts(raw: RawRecord, kind: RepoKind | null, stateF
     user_surface_touched: userSurfaceTouched,
     product_diff_size: productDiffSize,
     secret_shape_remaining: secretShapeRemaining,
+    docs_changed: docsChanged,
+    tests_changed: testsChanged,
+    ...newFacts,
     revert_of: null, // no patch-id index and no recorded deeds for earlier commits in the raw record
     answer_set_complete: true, // design-time projection, per computed_by
   };
   return { state, facts, notes };
 }
+
+/** Facts the projector computes ahead of their declaration in a system file; the facts check tolerates exactly these beyond the declared set. */
+const EXTRA_FACTS: ReadonlySet<string> = new Set([
+  "docs_changed", "tests_changed",
+  // r2 layer 0
+  "tables_created", "product_files_deleted", "named_symbols_removed", "deletion_dominant", "added_paths_mirror_existing",
+  "edit_shape", "assets_changed", "config_only", "tests_shape",
+]);
+type EditShape = "new_files_only" | "additions_in_existing" | "changes_existing_lines";
+const EDIT_SHAPES: readonly EditShape[] = ["new_files_only", "additions_in_existing", "changes_existing_lines"];
+type TestsShape = "none" | "new_test_files_only" | "existing_tests_changed";
+/** State fields the projector emits ahead of their declaration in a system file, with the caps the r2 notes give; a system file's own declaration wins. */
+const EXTRA_STATE: Readonly<Record<string, StateField>> = {
+  symbol_delta: { max_chars: 1500, truncate: "head_tail" },
+  existing_edits: { max_chars: 4000, truncate: "head_tail" },
+  docs_diff: { max_chars: 3000, truncate: "head_tail" },
+};

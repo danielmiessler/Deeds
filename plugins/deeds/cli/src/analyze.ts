@@ -32,7 +32,7 @@ export const CACHE_ROOT = `${process.env.HOME ?? "/tmp"}/.cache/deeds/classified
  * - SSH2 (RFC 4716 style): the same shape with four dashes and spaces inside them.
  * - PuTTY .ppk: from `PuTTY-User-Key-File-<n>:` through the `Private-MAC:` line.
  */
-export const PRIVATE_KEY_BLOCKS: readonly RegExp[] = [
+export const KEY_ARMOR_BLOCKS: readonly RegExp[] = [
   /-----BEGIN [A-Z0-9 ]*PRIVATE KEY(?: BLOCK)?-----(?:[\s\S]*?-----END [A-Z0-9 ]*PRIVATE KEY(?: BLOCK)?-----|[\s\S]*$)/g,
   /---- BEGIN [A-Z0-9 ]*PRIVATE KEY ----(?:[\s\S]*?---- END [A-Z0-9 ]*PRIVATE KEY ----|[\s\S]*$)/g,
   /PuTTY-User-Key-File-\d+:(?:[\s\S]*?Private-MAC:[^\n]*|[\s\S]*$)/g,
@@ -40,7 +40,7 @@ export const PRIVATE_KEY_BLOCKS: readonly RegExp[] = [
 
 /** Secret-shaped strings recognisable on their own; each whole match is replaced. */
 const SECRET_PATTERNS: RegExp[] = [
-  ...PRIVATE_KEY_BLOCKS,
+  ...KEY_ARMOR_BLOCKS,
   /\b(?:AKIA|ASIA)[0-9A-Z]{16}\b/g,
   /\b(?:sk|pk|rk)[-_](?:live|test|proj|ant)?[-_]?[A-Za-z0-9_-]{20,}\b/g,
   /\bgh[pousr]_[A-Za-z0-9]{30,}\b/g,
@@ -55,7 +55,7 @@ const SECRET_PATTERNS: RegExp[] = [
   /\beyJ[A-Za-z0-9_-]{8,}\.eyJ[A-Za-z0-9_-]{8,}\.[A-Za-z0-9_-]{8,}/g,
 ];
 /**
- * A password under a password-like name, whatever its length or characters: `DB_PASSWORD=hunter2 x!`,
+ * A password under a password-like name, whatever its length or characters: `db_password=hunter2 x!`,
  * `password: "pass phrase"`, `DB_PASS=s3cr3t`. The name is the whole run of name characters and must end in
  * password, passwd, passphrase, or a separate `pass` / `pwd` word (so `bypass`, `compass` and `cwd` do not
  * count), then `=` or `:` (`==`, `===` and `=>` are not assignments), then an optional opening quote, escaped
@@ -66,7 +66,7 @@ const PASSWORD_NAME =
   /(?<![A-Za-z0-9_.-])((?=([A-Za-z0-9_.-]+))\2(?<=passw(?:or)?d|passphrase|(?<![A-Za-z0-9])(?:pass|pwd)|[_.-](?:pass|pwd))\\?["']?[ \t]*[:=](?![=>])[ \t]*)(\\?["'`])?/gi;
 
 /** Where an unquoted password ends: a line break, a quote, or a `,`, `;` or space that starts the next `name:` / `name=`. */
-const UNQUOTED_PASSWORD_END = /[\r\n"'`]|[,; \t](?=[ \t]*\\?["']?[A-Za-z_][A-Za-z0-9_.-]*\\?["']?[ \t]*[:=])/g;
+const PASSWORD_VALUE_END = /[\r\n"'`]|[,; \t](?=[ \t]*\\?["']?[A-Za-z_][A-Za-z0-9_.-]*\\?["']?[ \t]*[:=])/g;
 
 /**
  * The end of a quoted password that starts at `p`: the matching quote `q` that is not itself escaped, or the end of the
@@ -98,8 +98,8 @@ function redactPasswords(text: string, onRedact: () => void): string {
     if (opener) {
       end = quotedPasswordEnd(text, p, opener.at(-1)!, opener.length === 2);
     } else {
-      UNQUOTED_PASSWORD_END.lastIndex = p;
-      end = UNQUOTED_PASSWORD_END.exec(text)?.index ?? text.length;
+      PASSWORD_VALUE_END.lastIndex = p;
+      end = PASSWORD_VALUE_END.exec(text)?.index ?? text.length;
     }
     const value = text.slice(p, end);
     if (value && value !== "[REDACTED]") {

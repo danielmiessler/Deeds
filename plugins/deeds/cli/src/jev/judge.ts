@@ -1,10 +1,12 @@
 /**
  * Jev as the judge: each commit becomes a raw record (files and diff, never the message), code computes its
- * facts and state, the judge stage's questions go to the judgment API in one request per commit, and the
- * policy turns facts plus answers into cap, fix and tend outcomes, which become deeds.
+ * facts and state, and the question system's stages run in declared order, the way the workshop runner runs
+ * them: a stage whose gate holds on the facts and the answers earlier stages returned sends all its questions in
+ * one request. Later stages (cap_branch, fix_check, confirm) read earlier answers, so a commit makes one request
+ * per stage that runs. The policy turns facts plus answers into cap, fix and tend outcomes, which become deeds.
  *
- * The request carries only the state fields the judge stage reads, each cut to its declared cap, after
- * redaction. A state that still holds a secret shape is never sent: the stage gate reads secret_shape_remaining.
+ * Each request carries only the state fields its stage reads, each cut to its declared cap, after redaction.
+ * A state that still holds a secret shape is never sent: every stage gate reads secret_shape_remaining.
  */
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { basename, join } from "node:path";
@@ -24,7 +26,6 @@ import { loadSystem, systemHash } from "./system.ts";
 export const JEV_MODEL = "jev-latest";
 /** What the cache and an unanswered run name. The cache is bound to the system hash as well. */
 export const JEV_MODEL_ID = `typesafe:${JEV_MODEL}`;
-const JUDGE_STAGE = "judge";
 const TIMEOUT_MS = 60_000;
 const MAX_ATTEMPTS = 3;
 /** Commits judged at once. Git reads and Jev calls overlap, so a 700-commit history is judged in well under a minute at this width. */
@@ -150,6 +151,18 @@ async function gitAsync(repo: string, args: string[]): Promise<string> {
 const RENAME = ["--find-renames", "--find-copies-harder", "-l20000"];
 
 /** Files, counts and the redacted diff from the five git outputs; shared by the sync and async readers. */
+/**
+ * The diff Jev sees: cut at whole lines past MAX_DIFF_BYTES, then marked with the line the facts read
+ * (`[diff truncated by deeds at K lines; M lines omitted]`), so a cut commit never reads as complete.
+ */
+export function cutForJudge(diffOut: string): string {
+  const kept = cutDiff(diffOut);
+  if (kept.length === diffOut.length) return diffOut;
+  const keptLines = kept.split("\n").length - 1;
+  const totalLines = diffOut.split("\n").length - (diffOut.endsWith("\n") ? 1 : 0);
+  return `${kept}[diff truncated by deeds at ${keptLines} lines; ${Math.max(0, totalLines - keptLines)} lines omitted]\n`;
+}
+
 function buildRaw(repoName: string, sha: string, parentsOut: string, statusOut: string, numstatOut: string, diffOut: string): { raw: RawRecord; redactions: number } {
   const parents = parentsOut.trim().split(/\s+/).length - 1;
   const status = statusOut.split("\n").filter(Boolean);
@@ -160,7 +173,7 @@ function buildRaw(repoName: string, sha: string, parentsOut: string, statusOut: 
     const letter = parts[0]!.charAt(0);
     return { path: parts.at(-1)!, status: STATUS_WORD[letter] ?? "modified", added: counts[i]?.added ?? 0, removed: counts[i]?.removed ?? 0 };
   });
-  const diff = cutDiff(diffOut);
+  const diff = cutForJudge(diffOut);
   const clean = redactSecrets(diff);
   return { raw: { repo: repoName, sha, parents, files, diff: clean.text }, redactions: clean.redactions };
 }
@@ -188,7 +201,7 @@ export async function rawRecordAsync(repo: string, repoName: string, sha: string
   return buildRaw(repoName, sha, parents, status, numstat, diff);
 }
 
-/** The judge stage's questions in the API's wire shape. */
+/** A stage's questions in the API's wire shape. */
 export function wireQuestions(questions: PolicyQuestion[]): Record<string, WireQuestion> {
   const out: Record<string, WireQuestion> = {};
   for (const q of questions) {
@@ -215,11 +228,17 @@ export function outcomesToDeeds(outcomes: Record<string, string>, raw: RawRecord
   return deeds;
 }
 
-/** What judging one commit needs besides the commit: the loaded system, the judge stage's wire questions and the repo's settings. */
-export interface CommitJudge {
-  system: PolicySystem & { state: StateFields };
+/** One stage as the judge sends it: its id, its questions in wire shape, and the state fields they read. */
+export interface WireStage {
+  id: string;
   questions: Record<string, WireQuestion>;
   reads: string[];
+}
+
+/** What judging one commit needs besides the commit: the loaded system, its stages in wire shape and the repo's settings. */
+export interface CommitJudge {
+  system: PolicySystem & { state: StateFields };
+  stages: WireStage[];
   kind: ReturnType<typeof resolveRepoKind>;
   settings: FactsOptions;
   transport: JevTransport;
@@ -227,47 +246,57 @@ export interface CommitJudge {
 
 export function commitJudge(transport: JevTransport, kind: CommitJudge["kind"], settings: FactsOptions = {}): CommitJudge {
   const system = loadSystem() as unknown as PolicySystem & { state: StateFields };
-  const stage = system.stages.find((s) => s.id === JUDGE_STAGE);
-  if (!stage) throw new Error(`src/jev/system.json has no "${JUDGE_STAGE}" stage`);
-  return { system, questions: wireQuestions(stage.questions), reads: [...new Set(stage.questions.flatMap((q) => q.reads))], kind, settings, transport };
+  if (system.stages.length === 0) throw new Error("src/jev/system.json has no stages");
+  const stages = system.stages.map((s) => {
+    if (s.questions.length === 0) throw new Error(`src/jev/system.json stage "${s.id}" has no questions`);
+    return { id: s.id, questions: wireQuestions(s.questions), reads: [...new Set(s.questions.flatMap((q) => q.reads))] };
+  });
+  return { system, stages, kind, settings, transport };
 }
 
 export interface JudgedCommit {
   deeds: Deed[];
   outcomes: Record<string, string>;
   facts: Record<string, unknown>;
-  /** Whether a judgment request was sent for this commit. */
+  /** The stages whose questions were sent, in the order they ran; one request each. */
+  stagesRun: string[];
+  /** Whether any judgment request was sent for this commit. */
   called: boolean;
   model: string | null;
   usage: { input: number; output: number };
 }
 
-/** Judge one raw record: facts and state in code, one request when the stage runs, then the policy and the names. */
+/**
+ * Judge one raw record: facts and state in code, then each stage in declared order, one request per stage whose
+ * gate holds on the facts and the answers so far, then the policy and the names. A failed request fails the
+ * commit (the caller records it as unjudged and caches nothing), never a partial answer set.
+ */
 export async function judgeCommit(raw: RawRecord, j: CommitJudge): Promise<JudgedCommit> {
   const built = await computeFacts(raw, j.kind, j.system.state, j.settings);
   const answers: Answers = {};
-  let called = false;
+  const stagesRun: string[] = [];
   let model: string | null = null;
   const usage = { input: 0, output: 0 };
-  if (stageRuns(j.system, JUDGE_STAGE, built.facts, answers)) {
+  for (const stage of j.stages) {
+    if (!stageRuns(j.system, stage.id, built.facts, answers)) continue;
     const state: Record<string, string> = {};
-    for (const f of j.reads) {
+    for (const f of stage.reads) {
       const v = built.state[f];
       const field = j.system.state[f];
       if (v === undefined || !field) continue;
       state[f] = truncateText(v, field.max_chars, field.truncate ?? "head");
     }
-    const req: JevRequest = { state, model: JEV_MODEL, questions: j.questions };
-    called = true;
+    const req: JevRequest = { state, model: JEV_MODEL, questions: stage.questions };
     const reply = await withRetry(() => j.transport(req));
-    model = reply.model;
-    usage.input = reply.usage?.input_tokens ?? 0;
-    usage.output = reply.usage?.output_tokens ?? 0;
-    Object.assign(answers, reply.answers);
+    stagesRun.push(stage.id);
+    model ??= reply.model;
+    usage.input += reply.usage?.input_tokens ?? 0;
+    usage.output += reply.usage?.output_tokens ?? 0;
+    for (const id of Object.keys(stage.questions)) answers[id] = reply.answers[id];
   }
   const outcomes = Object.fromEntries(evaluate(j.system, built.facts, answers).map((t) => [t.decision, t.outcome]));
   const deeds = outcomesToDeeds(outcomes, raw, { boundaryDelta: built.state.boundary_delta ?? "", filesText: built.state.files ?? "" });
-  return { deeds, outcomes, facts: built.facts, called, model, usage };
+  return { deeds, outcomes, facts: built.facts, stagesRun, called: stagesRun.length > 0, model, usage };
 }
 
 export interface JudgeOptions {
@@ -325,7 +354,7 @@ export async function judgeRepo(opts: JudgeOptions): Promise<Report> {
       const { raw, redactions: n } = await rawRecordAsync(opts.repo, opts.repoName, c.sha);
       redactions += n;
       const judged = await judgeCommit(raw, judge);
-      if (judged.called) calls++;
+      calls += judged.stagesRun.length;
       answeredBy ??= judged.model;
       tokens.input += judged.usage.input;
       tokens.output += judged.usage.output;
