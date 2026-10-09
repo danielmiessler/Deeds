@@ -25,10 +25,21 @@ function bash(commands: readonly Command[]): string {
 _deeds() {
   local cur command="" pending="" word choices="" i
   cur="\${COMP_WORDS[COMP_CWORD]}"
+  local quote="" escaped=0 char next path_context=0 file formatted prefix=""
+  for ((i=0; i<\${#cur}; i++)); do
+    char="\${cur:i:1}"; next="\${cur:i+1:1}"
+    if ((escaped)); then prefix+="$char"; escaped=0
+    elif [[ "$char" == "$quote" && -n "$quote" ]]; then quote=""
+    elif [[ "$char" == '\\' && "$quote" != "'" ]]; then
+      if [[ "$quote" == '"' && "$next" != '\\' && "$next" != '"' && "$next" != '$' && "$next" != '\`' ]]; then prefix+="$char"; else escaped=1; fi
+    elif [[ -z "$quote" && ( "$char" == "'" || "$char" == '"' ) ]]; then quote="$char"
+    else prefix+="$char"
+    fi
+  done
   COMPREPLY=()
   for ((i=1; i<COMP_CWORD; i++)); do
     word="\${COMP_WORDS[i]}"
-    case "$word" in --json|--allow-unsandboxed) continue ;; esac
+    case "$word" in ${GLOBAL_FLAGS.join("|")}) continue ;; esac
     if [[ -z "$command" ]]; then
       command="$word"
     elif [[ -n "$pending" ]]; then
@@ -47,26 +58,49 @@ ${commands.map((c) => `      ${c.name}) choices=${quote(flags(c).join(" "))} ;;`
     case "$pending" in
       --mode) choices=${quote(CHOICES["--mode"] ?? "")} ;;
       --vendor) choices=${quote(CHOICES["--vendor"] ?? "")} ;;
-      --html|--out) return 0 ;;
+      --html|--out) path_context=1 ;;
       --since|--until|--model|--rev) ;;
       *)
         if [[ "$command" == completions ]]; then
           choices='bash zsh fish'
         elif [[ "$command" == analyze || "$command" == analyze-many || "$command" == extract ]]; then
-          return 0
+          path_context=1
         fi
         ;;
     esac
   fi
+  [[ -n "$pending" ]] && choices="$choices ${GLOBAL_FLAGS.join(" ")}"
   if [[ -n "$choices" ]]; then
-    COMPREPLY=( $(compgen -W "$choices" -- "$cur") )
-    for ((i=0; i<\${#COMPREPLY[@]}; i++)); do COMPREPLY[i]+=" "; done
+    COMPREPLY=( $(compgen -W "$choices" -- "$prefix") )
+    if [[ -z "$quote" ]]; then
+      for ((i=0; i<\${#COMPREPLY[@]}; i++)); do COMPREPLY[i]+=" "; done
+    fi
   fi
-  # Bash 3.2 has no compopt. Only path contexts leave replies empty for native filename fallback.
-  (("\${#COMPREPLY[@]}")) || COMPREPLY=("$cur")
+  # No synthetic no-match reply: Readline would close an unfinished quote.
+  if ((path_context)); then
+    while IFS= read -r -d '' file; do
+      [[ -d "$file" ]] && file+=/
+      case "$quote" in
+        "'") formatted=\${file//\\'/\\'\\\\\\'\\'} ;;
+        '"')
+          formatted=\${file//\\\\/\\\\\\\\}
+          formatted=\${formatted//\\"/\\\\\\"}
+          formatted=\${formatted//\\$/\\\\\\$}
+          formatted=\${formatted//\\\`/\\\\\\\`}
+          ;;
+        *) printf -v formatted %q "$file" ;;
+      esac
+      [[ -z "$quote" && "$file" != */ ]] && formatted+=" "
+      COMPREPLY+=("$formatted")
+    done < <(
+      shopt -s nullglob; shopt -u failglob
+      [[ "$cur" == "~/"* ]] && prefix="$HOME/\${prefix:2}"
+      for file in "$prefix"*; do printf '%s\\0' "$file"; done
+    )
+  fi
   return 0
 }
-complete -o default -o nospace -F _deeds deeds
+complete -o nospace -F _deeds deeds
 `;
 }
 
@@ -74,6 +108,7 @@ function zsh(commands: readonly Command[]): string {
   const specs = (c: Command) => flags(c).map((flag) => {
     if (CHOICES[flag]) return quote(`${flag}:value:(${CHOICES[flag]})`);
     if (FILE_FLAGS[flag]) return quote(`${flag}:path:_files`);
+    if (flag === "--rev") return quote("--rev=:value:");
     if (VALUE_FLAGS[flag]) return quote(`${flag}:value:`);
     return quote(flag);
   });
@@ -85,7 +120,7 @@ function zsh(commands: readonly Command[]): string {
   };
   return `#compdef deeds
 _deeds() {
-  local context state state_descr line
+  local context state state_descr line command
   typeset -A opt_args
   local -a filtered
   local -i i cursor=$CURRENT original_current=$CURRENT
@@ -100,14 +135,30 @@ _deeds() {
   commands=(
 ${commands.map((c) => `    ${quote(`${c.name}:${c.summary}`)}`).join("\n")}
   )
-  _arguments -C '--json' '--allow-unsandboxed' '(-h --help)'{-h,--help}'[Show help]' '1:command:->command' '*::argument:->args'
-  case "$state" in
-    command) _describe 'command' commands ;;
-    args)
-      case "$line[1]" in
-${commands.map((c) => `        ${c.name}) _arguments ${[...specs(c), positional(c.name)].filter(Boolean).join(" ")} ;;`).join("\n")}
-      esac
-      ;;
+  if ((CURRENT == 2)); then
+    _arguments --json --allow-unsandboxed '(-h --help)'{-h,--help}'[Show help]' '1:command:->command'
+    [[ "$state" == command ]] && _describe command commands
+    return
+  fi
+  command="\${words[2]}"
+  words=("deeds-$command" "\${words[@]:2}")
+  ((CURRENT--))
+  local -a global_flags=(${GLOBAL_FLAGS.join(" ")})
+  # Filenames must not compete with option names, except in file-valued option contexts.
+  if [[ "$PREFIX" == -* ]]; then
+    case "\${words[CURRENT-1]}" in
+      --html|--out) compadd -a global_flags ;;
+      --since|--until|--mode|--vendor|--model|--rev) compadd -a global_flags; return ;;
+      *)
+        case "$command" in
+${commands.map((c) => `          ${c.name}) compadd -- ${flags(c).join(" ")} ;;`).join("\n")}
+        esac
+        return
+        ;;
+    esac
+  fi
+  case "$command" in
+${commands.map((c) => `    ${c.name}) _arguments ${[...specs(c), positional(c.name)].filter(Boolean).join(" ")} ;;`).join("\n")}
   esac
 }
 compdef _deeds deeds

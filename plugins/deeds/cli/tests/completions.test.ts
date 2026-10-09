@@ -17,6 +17,16 @@ const cases = [
   { line: "deeds analyze-many semi\t\n", args: ["analyze-many", "semi;file.txt"] },
   { line: "deeds analyze --html --json --ju\t\n", args: ["analyze", "--html", "--json", "--junk.html"] },
   { line: "deeds analyze --model unmatch\tX\n", args: ["analyze", "--model", "unmatchX"] },
+  { line: "deeds analyze --since \"last mon\tday\"\n", args: ["analyze", "--since", "last monday"] },
+  { line: "deeds analyze --since '2 w\teeks ago'\n", args: ["analyze", "--since", "2 weeks ago"] },
+  { line: "deeds analyze --mode \"f\t\n", args: ["analyze", "--mode", "full"] },
+  { line: "deeds analyze --mode --j\tf\t\n", args: ["analyze", "--mode", "--json", "full"] },
+  { line: "deeds extract --j\t\n", args: ["extract", "--json"] },
+  { line: "deeds analyze --model extract --v\to\t\n", args: ["analyze", "--model", "extract", "--vendor", "openai"] },
+  { line: "deeds completions z\t\n", args: ["completions", "zsh"] },
+  { line: "deeds analyze --json repo\\ s\t\n", args: ["analyze", "--json", expect.stringMatching(/^repo space\/?$/)] },
+  { line: "deeds extract --rev=HEAD repo\\ s\t\n", args: ["extract", "--rev=HEAD", expect.stringMatching(/^repo space\/?$/)] },
+  { line: "deeds analyze-many --out --json repo\\ s\t\n", args: ["analyze-many", "--out", "--json", expect.stringMatching(/^repo space\/?$/)] },
 ];
 
 for (const shell of ["bash", "zsh", "fish"]) {
@@ -30,7 +40,7 @@ for (const shell of ["bash", "zsh", "fish"]) {
       const script = join(dir, "completion");
       writeFileSync(script, generated.stdout);
       for (const name of ["doctor", "jev", "openai", "repo space"]) mkdirSync(join(dir, name));
-      for (const name of ["report list.txt", "semi;file.txt", "--junk.html", "repo space/child file.txt"]) writeFileSync(join(dir, name), "");
+      for (const name of ["report list.txt", "semi;file.txt", "--junk.html", "repo space/child file.txt", "last monday"]) writeFileSync(join(dir, name), "");
       const result = Bun.spawnSync([python, join(import.meta.dir, "complete_in_pty.py"), executable, script, dir, JSON.stringify(cases.map((c) => c.line))], { timeout: 25_000 });
       expect(result.stderr.toString()).toBe("");
       expect(result.exitCode).toBe(0);

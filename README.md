@@ -108,7 +108,7 @@ For Bash, add this to your shell startup file:
 eval "$(deeds completions bash)"
 ```
 
-Bash leaves completed paths open for further typing. Type a space before the next argument.
+Bash preserves unfinished quoted values and adds argument separators only outside quotes.
 
 For Zsh, add this to `~/.zshrc` after completion initialization:
 
