@@ -65,7 +65,9 @@ export function writeOutput(path: string, data: string, allowAny: boolean): void
     throw err;
   }
   try {
-    writeSync(fd, data);
+    // writeSync may write part of the buffer (a nearly full disk); keep going until all of it is written or it throws.
+    const buf = Buffer.from(data);
+    for (let off = 0; off < buf.length; ) off += writeSync(fd, buf, off, buf.length - off);
   } finally {
     closeSync(fd);
   }

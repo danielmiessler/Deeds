@@ -105,6 +105,9 @@ describe("a password rule never hides a neighbouring secret", () => {
     const env = "DB_PASS=s3cr3t API_TOKEN=abcdefghijklmnop12";
     expect(redactSecrets(env).text).not.toContain("abcdefghijklmnop12");
     expect(redactSecrets(env).text).not.toContain("s3cr3t");
+    const escaped = String.raw`"{password: null, apiKey: \"abcdefghijklmnop\"}"`;
+    expect(redactSecretValues(escaped)).not.toContain("abcdefghijklmnop");
+    expect(redactSecrets("password: hunter2 x!").text).toBe("password: [REDACTED]");
   });
 });
 
