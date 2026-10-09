@@ -1165,6 +1165,19 @@ const trimmedLineCount = (v: FileView): number => {
   return (v.git === "A" || v.git === "D") && n > 60 ? 51 : n;
 };
 
+/**
+ * A test call and its quoted title: `it("...")`, `test.only('...')`, `describe(`...`)`. The title is group 2.
+ *
+ * The first body alternative reads the string the usual way: `\x` is one escape, any other character but the
+ * quote is itself, and the first unescaped quote closes it. Only the escape branch may take a backslash, so
+ * each character has one reading and the scan stays linear. When no unescaped quote closes the string, the
+ * second alternative takes the title up to the line's last quote. That is what the earlier body
+ * `(?:\\.|(?!\1).)*` returned in that case after trying every way to split a run of backslashes, which took
+ * time exponential in the run's length. Both alternatives stop at line terminators, as `.` did.
+ */
+export const TEST_TITLE_CALL =
+  /\b(?:it|test|describe)(?:\.(?:only|skip|each|todo|concurrent))?\s*\(\s*(["'`])((?:\\.|(?!\1)[^\\\n\r\u2028\u2029])*|.*)\1/g;
+
 /** Test-case names from added lines in live test-class files, deduplicated and redacted; null when no test file changed. */
 function testTitles(views: FileView[]): string | null {
   const tests = views.filter((v) => v.cls === "test");
@@ -1174,7 +1187,7 @@ function testTitles(views: FileView[]): string | null {
     if (!v.section) continue;
     const lines = addedLines(v.section);
     lines.forEach((l, i) => {
-      for (const m of l.matchAll(/\b(?:it|test|describe)(?:\.(?:only|skip|each|todo|concurrent))?\s*\(\s*(["'`])((?:\\.|(?!\1).)*)\1/g)) titles.push(m[2]!);
+      for (const m of l.matchAll(TEST_TITLE_CALL)) titles.push(m[2]!);
       const py = /^\s*(?:async\s+)?def\s+(test_\w+)/.exec(l); if (py) titles.push(py[1]!);
       const go = /^\s*func\s+(Test\w+)\s*\(/.exec(l); if (go) titles.push(go[1]!);
       if (/^\s*#\[(?:tokio::)?test\]/.test(l)) {
