@@ -58,14 +58,59 @@ const SECRET_PATTERNS: RegExp[] = [
  * A password under a password-like name, whatever its length or characters: `DB_PASSWORD=hunter2 x!`,
  * `password: "pass phrase"`, `DB_PASS=s3cr3t`. The name is the whole run of name characters and must end in
  * password, passwd, passphrase, or a separate `pass` / `pwd` word (so `bypass`, `compass` and `cwd` do not
- * count). The value runs to the closing quote (an escaped `\"` included), the end of the line, or a `,`, `;` or space
- * that starts the next `name:` or `name=`, so it never takes in a neighbouring assignment; any other backslash is part of
- * the value. `==`, `===` and `=>` are
- * not assignments.
- * Like the name=value patterns below, the name is taken in one step (`(?=(...))\2`), so the scan stays linear.
+ * count), then `=` or `:` (`==`, `===` and `=>` are not assignments), then an optional opening quote, escaped
+ * (`\"`) or not, in group 3. The value itself is read by redactPasswords(). Like the name=value patterns below,
+ * the name is taken in one step (`(?=(...))\2`), so the scan stays linear.
  */
-const PASSWORD_VALUE =
-  /(?<![A-Za-z0-9_.-])((?=([A-Za-z0-9_.-]+))\2(?<=passw(?:or)?d|passphrase|(?<![A-Za-z0-9])(?:pass|pwd)|[_.-](?:pass|pwd))\\?["']?[ \t]*[:=](?![=>])[ \t]*\\?["'`]?)((?:(?![,; \t][ \t]*\\?["']?[A-Za-z_][A-Za-z0-9_.-]*\\?["']?[ \t]*[:=])(?:\\(?!["'`])[^\r\n]|[^"'`\\\r\n]))+)/gi;
+const PASSWORD_NAME =
+  /(?<![A-Za-z0-9_.-])((?=([A-Za-z0-9_.-]+))\2(?<=passw(?:or)?d|passphrase|(?<![A-Za-z0-9])(?:pass|pwd)|[_.-](?:pass|pwd))\\?["']?[ \t]*[:=](?![=>])[ \t]*)(\\?["'`])?/gi;
+
+/** Where an unquoted password ends: a line break, a quote, or a `,`, `;` or space that starts the next `name:` / `name=`. */
+const UNQUOTED_PASSWORD_END = /[\r\n"'`]|[,; \t](?=[ \t]*\\?["']?[A-Za-z_][A-Za-z0-9_.-]*\\?["']?[ \t]*[:=])/g;
+
+/**
+ * The end of a quoted password that starts at `p`: the matching quote `q` that is not itself escaped, or the end of the
+ * line. With `escaped`, the text is one level of string escaping deep (`"{\"password\": \"ab\\\"c\"}"`), so each
+ * `\x` pair is read as the character `x` first.
+ */
+function quotedPasswordEnd(text: string, p: number, q: string, escaped: boolean): number {
+  let i = p;
+  let innerEscape = false;
+  while (i < text.length && text[i] !== "\n" && text[i] !== "\r") {
+    const pair = escaped && text[i] === "\\" && i + 1 < text.length;
+    const ch = pair ? text[i + 1]! : text[i]!;
+    if (!innerEscape && ch === q) return i;
+    innerEscape = !innerEscape && ch === "\\";
+    i += pair ? 2 : 1;
+  }
+  return i;
+}
+
+/** Replace every password value (see PASSWORD_NAME), keeping its name, separator and quotes. */
+function redactPasswords(text: string, onRedact: () => void): string {
+  const re = new RegExp(PASSWORD_NAME.source, PASSWORD_NAME.flags);
+  let out = "";
+  let copied = 0;
+  for (let m = re.exec(text); m; m = re.exec(text)) {
+    const opener = m[3] ?? "";
+    const p = m.index + m[1]!.length + opener.length;
+    let end: number;
+    if (opener) {
+      end = quotedPasswordEnd(text, p, opener.at(-1)!, opener.length === 2);
+    } else {
+      UNQUOTED_PASSWORD_END.lastIndex = p;
+      end = UNQUOTED_PASSWORD_END.exec(text)?.index ?? text.length;
+    }
+    const value = text.slice(p, end);
+    if (value && value !== "[REDACTED]") {
+      out += text.slice(copied, p) + "[REDACTED]";
+      copied = end;
+      onRedact();
+    }
+    re.lastIndex = Math.max(end, m.index + 1);
+  }
+  return copied === 0 ? text : out + text.slice(copied);
+}
 
 /** Secrets known by their context: group 1 (the name or scheme) is kept, the rest of the match (the value) is replaced. */
 const SECRET_CONTEXTS: RegExp[] = [
@@ -73,7 +118,7 @@ const SECRET_CONTEXTS: RegExp[] = [
   /(\b(?:Bearer|Basic|Token)\s+)([A-Za-z0-9._~+/-]{16,}=*)/g,
   // The password inside a URL: scheme://user:<password>@host.
   /(\b[a-z][a-z0-9+.-]*:\/\/[^/\s:@'"]+:)([^@\s/'"]{3,})(?=@)/gi,
-  // A password under a password-like name (PASSWORD_VALUE) runs last, in redactSecrets().
+  // A password under a password-like name runs last, in redactPasswords().
   // The two name=value patterns below are written to stay linear on long identifier runs: the name may only
   // start where a run of name characters starts, a lookahead checks that the run holds a secret-like word, and
   // `(?=(...))\2` takes the whole run at once without backtracking into it. They match what
@@ -150,12 +195,7 @@ export function redactSecrets(text: string): { text: string; redactions: number 
   // Passwords go last. Their value runs to the closing quote or the end of the line, so on a line such as
   // `password: null, apiKey: "..."` it takes in the next name; run earlier, that left the key's value with no
   // name in front of it for the rules above to recognise.
-  out = out.replace(PASSWORD_VALUE, (m: string, head: string) => {
-    // A password value an earlier pattern already replaced is not counted twice.
-    if (m.slice(head.length) === "[REDACTED]") return m;
-    redactions++;
-    return `${head}[REDACTED]`;
-  });
+  out = redactPasswords(out, () => redactions++);
   return { text: out, redactions };
 }
 

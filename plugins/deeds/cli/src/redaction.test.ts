@@ -111,6 +111,9 @@ describe("a password rule never hides a neighbouring secret", () => {
     const shell = String.raw`DB_PASS=short API_KEY=\"abcdefghijklmnop123\"`;
     expect(redactSecretValues(shell)).not.toContain("abcdefghijklmnop123");
     expect(redactSecrets("DB_PASS=short API_KEY=abcdefghijklmnop123").text).not.toContain("abcdefghijklmnop123");
+    expect(redactSecrets(String.raw`"password": "ab\"cdef"`).text).toBe(`"password": "[REDACTED]"`);
+    expect(redactSecrets(String.raw`"{\"password\": \"ab\\\"cd\"}"`).text).toBe(String.raw`"{\"password\": \"[REDACTED]\"}"`);
+    expect(redactSecrets("password: 'it''s'").text).not.toContain("it");
     expect(redactSecrets(String.raw`DB_PASS='\hunter2'`).text).toBe("DB_PASS='[REDACTED]'");
     expect(redactSecrets(String.raw`DB_PASS='abc\def'`).text).toBe("DB_PASS='[REDACTED]'");
     expect(redactSecrets(String.raw`{\"password\": \"s3cr3t pass\"}`).text).not.toContain("s3cr3t");
