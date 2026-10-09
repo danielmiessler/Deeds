@@ -97,6 +97,17 @@ const randomLine = (next: () => number) => {
   return s;
 };
 
+describe("a password rule never hides a neighbouring secret", () => {
+  test("a key after a password on the same line is still redacted", () => {
+    const line = `const config = { password: null, apiKey: "abcdefghijklmnop1" };`;
+    expect(redactSecrets(line).text).not.toContain("abcdefghijklmnop1");
+    expect(redactSecretValues(line)).not.toContain("abcdefghijklmnop1");
+    const env = "DB_PASS=s3cr3t API_TOKEN=abcdefghijklmnop12";
+    expect(redactSecrets(env).text).not.toContain("abcdefghijklmnop12");
+    expect(redactSecrets(env).text).not.toContain("s3cr3t");
+  });
+});
+
 describe("unchanged readings", () => {
   test("redactSecrets matches the previous name=value patterns on random short strings", () => {
     const next = rng(5);

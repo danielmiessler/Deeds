@@ -70,8 +70,7 @@ const SECRET_CONTEXTS: RegExp[] = [
   /(\b(?:Bearer|Basic|Token)\s+)([A-Za-z0-9._~+/-]{16,}=*)/g,
   // The password inside a URL: scheme://user:<password>@host.
   /(\b[a-z][a-z0-9+.-]*:\/\/[^/\s:@'"]+:)([^@\s/'"]{3,})(?=@)/gi,
-  // A password under a password-like name (PASSWORD_VALUE).
-  PASSWORD_VALUE,
+  // A password under a password-like name (PASSWORD_VALUE) runs last, in redactSecrets().
   // The two name=value patterns below are written to stay linear on long identifier runs: the name may only
   // start where a run of name characters starts, a lookahead checks that the run holds a secret-like word, and
   // `(?=(...))\2` takes the whole run at once without backtracking into it. They match what
@@ -139,14 +138,21 @@ export function redactSecrets(text: string): { text: string; redactions: number 
     });
   }
   for (const re of SECRET_CONTEXTS) {
-    out = out.replace(re, (m: string, head: string) => {
-      // A password value an earlier pattern already replaced is not counted twice.
-      if (re === PASSWORD_VALUE && m.slice(head.length) === "[REDACTED]") return m;
+    out = out.replace(re, (_m: string, head: string) => {
       redactions++;
       return `${head}[REDACTED]`;
     });
   }
   out = redactUnquoted(out, () => redactions++);
+  // Passwords go last. Their value runs to the closing quote or the end of the line, so on a line such as
+  // `password: null, apiKey: "..."` it takes in the next name; run earlier, that left the key's value with no
+  // name in front of it for the rules above to recognise.
+  out = out.replace(PASSWORD_VALUE, (m: string, head: string) => {
+    // A password value an earlier pattern already replaced is not counted twice.
+    if (m.slice(head.length) === "[REDACTED]") return m;
+    redactions++;
+    return `${head}[REDACTED]`;
+  });
   return { text: out, redactions };
 }
 
