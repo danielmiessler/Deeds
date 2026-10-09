@@ -95,7 +95,9 @@ const ALL_VALUE_SHAPES: readonly RegExp[] = [...SECRET_VALUE_SHAPES, ...REDACTIO
 /** `text` with every secret-shaped value replaced: deeds' redaction, then the shapes above. Run it before any cut. */
 export function redactSecretValues(text: string): string {
   if (!text) return text;
-  let out = redactSecrets(text).text;
+  // The name-based rule runs on the raw text first, while every name still stands next to its value; a later
+  // rule (a password value running to the end of the line) could otherwise take a neighbouring name with it.
+  let out = redactSecrets(text.replace(SECRET_ASSIGNMENT, (_m, name: string) => name + REDACTION_MARK)).text;
   for (const re of PRIVATE_KEY_BLOCKS) out = out.replace(re, REDACTION_MARK);
   for (const re of ALL_VALUE_SHAPES) out = out.replace(re, REDACTION_MARK);
   return out.replace(SECRET_ASSIGNMENT, (_m, name: string) => name + REDACTION_MARK);

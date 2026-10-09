@@ -108,6 +108,9 @@ describe("a password rule never hides a neighbouring secret", () => {
     const escaped = String.raw`"{password: null, apiKey: \"abcdefghijklmnop\"}"`;
     expect(redactSecretValues(escaped)).not.toContain("abcdefghijklmnop");
     expect(redactSecrets("password: hunter2 x!").text).toBe("password: [REDACTED]");
+    const shell = String.raw`DB_PASS=short API_KEY=\"abcdefghijklmnop123\"`;
+    expect(redactSecretValues(shell)).not.toContain("abcdefghijklmnop123");
+    expect(redactSecrets("DB_PASS=short API_KEY=abcdefghijklmnop123").text).not.toContain("abcdefghijklmnop123");
     expect(redactSecrets(String.raw`DB_PASS='\hunter2'`).text).toBe("DB_PASS='[REDACTED]'");
     expect(redactSecrets(String.raw`DB_PASS='abc\def'`).text).toBe("DB_PASS='[REDACTED]'");
     expect(redactSecrets(String.raw`{\"password\": \"s3cr3t pass\"}`).text).not.toContain("s3cr3t");

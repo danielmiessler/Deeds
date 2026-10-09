@@ -50,8 +50,9 @@ export async function runAnalyzeMany(ctx: Pick<CommandContext, "args" | "json" |
     }
   }
   if (outDir) {
-    const dir = outDir;
-    mkdirSync(dir, { recursive: true });
+    mkdirSync(outDir, { recursive: true });
+    // Checked again now: the runs can take minutes, and the folder must still be safe when it is written.
+    const dir = checkOutputPath(ctx.cwd, out!, "dir", flags.allowAnyOutput === true);
     repos.forEach((r, i) => {
       if (r.report) writeOutput(join(dir, `${String(i + 1).padStart(3, "0")}-${r.repo.replace(/[^A-Za-z0-9._-]+/g, "_").slice(-80)}.json`), JSON.stringify(r.report, null, 2), flags.allowAnyOutput === true);
     });

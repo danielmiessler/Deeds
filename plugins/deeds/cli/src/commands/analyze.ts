@@ -52,7 +52,8 @@ export async function runAnalyze(ctx: Pick<CommandContext, "args" | "json" | "cw
   }
   let text = renderReport(report, wantColor(flags.color, deps.env));
   if (htmlOut) {
-    const out = htmlOut;
+    // Checked again now: the analysis can take minutes, and the path must still be safe when it is written.
+    const out = checkOutputPath(ctx.cwd, flags.html!, "html", flags.allowAnyOutput === true);
     try {
       writeOutput(out, renderHtml(report, { version: pkg.version, generated: new Date().toISOString() }), flags.allowAnyOutput === true);
     } catch (err) {

@@ -58,14 +58,14 @@ const SECRET_PATTERNS: RegExp[] = [
  * A password under a password-like name, whatever its length or characters: `DB_PASSWORD=hunter2 x!`,
  * `password: "pass phrase"`, `DB_PASS=s3cr3t`. The name is the whole run of name characters and must end in
  * password, passwd, passphrase, or a separate `pass` / `pwd` word (so `bypass`, `compass` and `cwd` do not
- * count). The value runs to the closing quote (an escaped `\"` included), the end of the line, or a `,` / `;` that
- * starts the next `name:` or `name=`, so it never takes in a neighbouring assignment; any other backslash is part of
+ * count). The value runs to the closing quote (an escaped `\"` included), the end of the line, or a `,`, `;` or space
+ * that starts the next `name:` or `name=`, so it never takes in a neighbouring assignment; any other backslash is part of
  * the value. `==`, `===` and `=>` are
  * not assignments.
  * Like the name=value patterns below, the name is taken in one step (`(?=(...))\2`), so the scan stays linear.
  */
 const PASSWORD_VALUE =
-  /(?<![A-Za-z0-9_.-])((?=([A-Za-z0-9_.-]+))\2(?<=passw(?:or)?d|passphrase|(?<![A-Za-z0-9])(?:pass|pwd)|[_.-](?:pass|pwd))\\?["']?[ \t]*[:=](?![=>])[ \t]*\\?["'`]?)((?:(?![,;][ \t]*\\?["']?[A-Za-z_][A-Za-z0-9_.-]*\\?["']?[ \t]*[:=])(?:\\(?!["'`])[^\r\n]|[^"'`\\\r\n]))+)/gi;
+  /(?<![A-Za-z0-9_.-])((?=([A-Za-z0-9_.-]+))\2(?<=passw(?:or)?d|passphrase|(?<![A-Za-z0-9])(?:pass|pwd)|[_.-](?:pass|pwd))\\?["']?[ \t]*[:=](?![=>])[ \t]*\\?["'`]?)((?:(?![,; \t][ \t]*\\?["']?[A-Za-z_][A-Za-z0-9_.-]*\\?["']?[ \t]*[:=])(?:\\(?!["'`])[^\r\n]|[^"'`\\\r\n]))+)/gi;
 
 /** Secrets known by their context: group 1 (the name or scheme) is kept, the rest of the match (the value) is replaced. */
 const SECRET_CONTEXTS: RegExp[] = [
