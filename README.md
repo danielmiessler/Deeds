@@ -90,6 +90,13 @@ curl -fsSL https://raw.githubusercontent.com/danielmiessler/deeds/main/install.s
 
 That runs [`install.sh`](install.sh) from this repo. It puts the CLI in `~/.local/share/deeds` and a `deeds` command in `~/.local/bin`, and never uses elevated privileges. It downloads one tarball from this repo's latest release, checks its sha256 against the published checksum, and refuses to install if they differ. To pin the checksum yourself, set `DEEDS_SHA256`.
 
+If you use Nix, the repo is also a flake. It builds the same CLI with bun from nixpkgs, installs the locked dependencies at build time, and downloads no dependencies at run time:
+
+```sh
+nix run github:danielmiessler/deeds -- version
+nix profile install github:danielmiessler/deeds
+```
+
 Check it worked:
 
 ```sh
