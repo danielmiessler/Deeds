@@ -5,7 +5,7 @@
  * resolved), an existing --html target must be an .html file, and an existing --out target must be a folder.
  * `--allow-any-output` lifts all three for a person who means it.
  */
-import { existsSync, lstatSync, realpathSync } from "node:fs";
+import { closeSync, constants, existsSync, lstatSync, openSync, realpathSync, writeSync } from "node:fs";
 import { dirname, extname, isAbsolute, relative, resolve } from "node:path";
 import { DeedsError, EXIT } from "./contract.ts";
 
@@ -46,4 +46,27 @@ export function checkOutputPath(cwd: string, target: string, kind: "html" | "dir
   // Lexically under cwd, and still under it once the existing part of the path is resolved through symlinks.
   if (!inside(resolve(cwd), out) || !inside(base, realExisting(out))) refuse(`it is outside the working directory ${base}`);
   return out;
+}
+
+/**
+ * Write one output file without following a symlink at its own path. checkOutputPath vets the path it is given,
+ * but analyze-many names a file inside the --out folder per repository, and a symlink planted there (or one that
+ * appears after the check) would carry the write outside the working directory. `allowAny` writes as asked.
+ */
+export function writeOutput(path: string, data: string, allowAny: boolean): void {
+  const flags = constants.O_WRONLY | constants.O_CREAT | constants.O_TRUNC | (allowAny ? 0 : constants.O_NOFOLLOW);
+  let fd: number;
+  try {
+    fd = openSync(path, flags, 0o644);
+  } catch (err) {
+    if ((err as NodeJS.ErrnoException).code === "ELOOP") {
+      throw new DeedsError("usage", `${path}: it is a symbolic link; pass ${ALLOW_ANY_OUTPUT_FLAG} to write there anyway`, EXIT.usage);
+    }
+    throw err;
+  }
+  try {
+    writeSync(fd, data);
+  } finally {
+    closeSync(fd);
+  }
 }

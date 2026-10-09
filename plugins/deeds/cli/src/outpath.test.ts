@@ -5,7 +5,7 @@ import { join } from "node:path";
 import { runAnalyzeMany } from "./commands/analyze-many.ts";
 import { runAnalyze, type AnalyzeDeps } from "./commands/analyze.ts";
 import { DeedsError } from "./contract.ts";
-import { checkOutputPath } from "./outpath.ts";
+import { checkOutputPath, writeOutput } from "./outpath.ts";
 
 const work = mkdtempSync(join(process.env.TMPDIR || tmpdir(), "deeds-out-"));
 afterAll(() => rmSync(work, { recursive: true, force: true }));
@@ -91,5 +91,22 @@ describe("analyze and analyze-many refuse before doing any work", () => {
     writeFileSync(join(cwd, "list.txt"), ".\n");
     expect(await run(() => runAnalyzeMany({ args: ["list.txt", "--out", elsewhere], json: true, cwd }, deps))).toStartWith("usage: --out");
     expect((await run(() => runAnalyzeMany({ args: ["list.txt", "--out", "reports"], json: true, cwd }, deps))) ?? "ran").not.toStartWith("usage");
+  });
+});
+
+describe("writeOutput", () => {
+  test("refuses to write through a symlink at the file's own path", () => {
+    const dir = join(cwd, "reports");
+    mkdirSync(dir, { recursive: true });
+    symlinkSync(join(elsewhere, "rc"), join(dir, "001-repo.json"));
+    expect(code(() => writeOutput(join(dir, "001-repo.json"), "{}", false))).toBe("usage");
+    expect(readFileSync(join(elsewhere, "rc"), "utf8")).toBe("keep me too\n");
+  });
+
+  test("writes a new file and replaces an existing one", () => {
+    const p = join(cwd, "fresh.json");
+    writeOutput(p, "one", false);
+    writeOutput(p, "two", false);
+    expect(readFileSync(p, "utf8")).toBe("two");
   });
 });

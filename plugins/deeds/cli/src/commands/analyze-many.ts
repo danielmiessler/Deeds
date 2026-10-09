@@ -1,8 +1,8 @@
-import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, readFileSync } from "node:fs";
 import { join, resolve as resolvePath } from "node:path";
 import type { Report } from "../analyze.ts";
 import { type Command, type CommandContext, type CommandResult, DeedsError, EXIT, type JsonValue } from "../contract.ts";
-import { checkOutputPath } from "../outpath.ts";
+import { checkOutputPath, writeOutput } from "../outpath.ts";
 import { parseAnalyzeArgs, resolveJudge } from "../resolve.ts";
 import { analyzeTarget, liveDeps, type AnalyzeDeps } from "./analyze.ts";
 
@@ -53,7 +53,7 @@ export async function runAnalyzeMany(ctx: Pick<CommandContext, "args" | "json" |
     const dir = outDir;
     mkdirSync(dir, { recursive: true });
     repos.forEach((r, i) => {
-      if (r.report) writeFileSync(join(dir, `${String(i + 1).padStart(3, "0")}-${r.repo.replace(/[^A-Za-z0-9._-]+/g, "_").slice(-80)}.json`), JSON.stringify(r.report, null, 2));
+      if (r.report) writeOutput(join(dir, `${String(i + 1).padStart(3, "0")}-${r.repo.replace(/[^A-Za-z0-9._-]+/g, "_").slice(-80)}.json`), JSON.stringify(r.report, null, 2), flags.allowAnyOutput === true);
     });
   }
   const totals = { cap: 0, fix: 0, tend: 0 };
