@@ -6,7 +6,7 @@
  * `--allow-any-output` lifts all three for a person who means it.
  */
 import { closeSync, constants, existsSync, lstatSync, openSync, realpathSync, writeSync } from "node:fs";
-import { dirname, extname, isAbsolute, relative, resolve } from "node:path";
+import { dirname, extname, isAbsolute, relative, resolve, sep } from "node:path";
 import { DeedsError, EXIT } from "./contract.ts";
 
 export const ALLOW_ANY_OUTPUT_FLAG = "--allow-any-output";
@@ -24,7 +24,7 @@ function realExisting(p: string): string {
 
 function inside(base: string, p: string): boolean {
   const rel = relative(base, p);
-  return rel === "" || (!rel.startsWith("..") && !isAbsolute(rel));
+  return rel === "" || (rel !== ".." && !rel.startsWith(`..${sep}`) && !isAbsolute(rel));
 }
 
 /** Resolve an output path against `cwd` and refuse it unless it is safe to write, or `allowAny` is set. */

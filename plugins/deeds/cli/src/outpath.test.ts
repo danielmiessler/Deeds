@@ -94,6 +94,13 @@ describe("analyze and analyze-many refuse before doing any work", () => {
   });
 });
 
+describe("names that begin with two dots", () => {
+  test("are children of the working directory, not its parent", () => {
+    expect(checkOutputPath(cwd, "..report.html", "html", false)).toBe(join(cwd, "..report.html"));
+    expect(code(() => checkOutputPath(cwd, "../x.html", "html", false))).toBe("usage");
+  });
+});
+
 describe("writeOutput", () => {
   test("refuses to write through a symlink at the file's own path", () => {
     const dir = join(cwd, "reports");
