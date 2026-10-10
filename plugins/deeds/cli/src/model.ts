@@ -24,6 +24,8 @@ export interface ModelOptions {
   vendor: Vendor;
   apiKey: string;
   model: string;
+  /** OpenAI-compatible base URL (must end with /v1); default https://api.openai.com/v1. Egress-still-checked. */
+  baseUrl?: string;
   client?: ModelClient;
   /** Injected in tests so backoff costs no wall time. */
   sleep?: (ms: number) => Promise<void>;
@@ -78,11 +80,12 @@ export function vendorModel(opts: ModelOptions): ModelFn {
       };
     };
   }
+  const openaiUrl = `${(opts.baseUrl ?? "https://api.openai.com/v1").replace(/\/$/, "")}/chat/completions`;
   return async ({ system, user, responseSchema }): Promise<ModelReply> => {
     const response_format = responseSchema
       ? { type: "json_schema", json_schema: { name: responseSchema.name, strict: true, schema: responseSchema.schema } }
       : { type: "json_object" };
-    const doc = (await postWithRetry(client, "https://api.openai.com/v1/chat/completions", {
+    const doc = (await postWithRetry(client, openaiUrl, {
       method: "POST",
       headers: { "content-type": "application/json", authorization: `Bearer ${opts.apiKey}` },
       body: JSON.stringify({

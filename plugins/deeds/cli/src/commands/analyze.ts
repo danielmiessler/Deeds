@@ -27,7 +27,7 @@ export function defaultJev(apiKey: string, env: Record<string, string | undefine
 
 export const liveDeps: AnalyzeDeps = {
   env: process.env,
-  makeModel: (r) => vendorModel({ vendor: r.vendor, apiKey: r.apiKey, model: r.model }),
+  makeModel: (r) => vendorModel({ vendor: r.vendor, apiKey: r.apiKey, model: r.model, ...(r.baseUrl ? { baseUrl: r.baseUrl } : {}) }),
   makeJev: defaultJev,
 };
 

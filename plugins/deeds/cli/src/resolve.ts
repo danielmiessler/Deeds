@@ -8,6 +8,7 @@ import { existsSync, readFileSync, statSync } from "node:fs";
 import { homedir } from "node:os";
 import { join, resolve as resolvePath } from "node:path";
 import { DeedsError, EXIT } from "./contract.ts";
+import { allowedExtraHost } from "./egress.ts";
 import { parseGithub } from "./git.ts";
 import type { Vendor } from "./model.ts";
 import { REPO_KINDS, type FactsOptions, type RepoKind } from "./jev/facts.ts";
@@ -139,6 +140,8 @@ export interface ResolvedModel {
   vendor: Vendor;
   apiKey: string;
   model: string;
+  /** OpenAI-compatible base URL for the openai vendor; default https://api.openai.com/v1. */
+  baseUrl?: string;
   /** `<vendor>:<model>`, what the report names. */
   modelId: string;
 }
@@ -166,15 +169,42 @@ export function resolveJudge(flags: Pick<AnalyzeFlags, "mode" | "vendor" | "mode
   return { mode: "jev", apiKey };
 }
 
-/** Decide vendor, key and model for the full-model reference read (--mode full). */
+/** Decide vendor, key and model for the full-model reference read (--mode full).
+ * A custom OpenAI-compatible endpoint is only used when the operator explicitly chose the openai
+ * vendor (`--vendor openai`): then set DEEDS_OPENAI_BASE_URL (e.g. http://pluto:40115/v1) and
+ * DEEDS_ALLOW_HOST to the endpoint's host[:port], and OPENAI_API_KEY may be absent (a dummy is used).
+ * An ambient DEEDS_OPENAI_BASE_URL never picks the vendor on its own, so it cannot silently
+ * redirect a run that was not asked to use a custom endpoint.
+ */
 export function resolveModel(flags: Pick<AnalyzeFlags, "vendor" | "model">, env: Record<string, string | undefined>, home: string = env.HOME ?? homedir()): ResolvedModel {
   const keyFor = (v: Vendor) => env[KEY_ENV[v]] || configKey(v, home);
+  // The base URL is read only for an explicitly-chosen openai vendor, so it configures the endpoint
+  // but never selects the vendor.
+  const customBaseUrl = flags.vendor === "openai" ? env.DEEDS_OPENAI_BASE_URL : undefined;
   const vendor = flags.vendor ?? (keyFor("anthropic") ? "anthropic" : keyFor("openai") ? "openai" : undefined);
-  if (!vendor) throw new DeedsError("missing_key", "--mode full needs ANTHROPIC_API_KEY or OPENAI_API_KEY; deeds sends each commit's diff to that model with your own key", EXIT.usage);
-  const apiKey = keyFor(vendor);
-  if (!apiKey) throw new DeedsError("missing_key", `--vendor ${vendor} needs ${KEY_ENV[vendor]}; deeds sends each commit's diff to that model with your own key`, EXIT.usage);
+  if (!vendor) throw new DeedsError("missing_key", "--mode full needs ANTHROPIC_API_KEY or OPENAI_API_KEY (or --vendor openai with DEEDS_OPENAI_BASE_URL for a custom endpoint); deeds sends each commit's diff to that model with your own key", EXIT.usage);
+  let apiKey = keyFor(vendor);
+  if (!apiKey) {
+    // A custom endpoint does not validate the OpenAI key, so a placeholder is enough to pass the
+    // client's header check; the real trust boundary is DEEDS_ALLOW_HOST, not this value.
+    if (vendor === "openai" && customBaseUrl) apiKey = "deeds-local";
+    else throw new DeedsError("missing_key", `--vendor ${vendor} needs ${KEY_ENV[vendor]}; deeds sends each commit's diff to that model with your own key`, EXIT.usage);
+  }
   const model = flags.model ?? env.DEEDS_MODEL ?? DEFAULT_MODEL[vendor];
-  return { mode: "full", vendor, apiKey, model, modelId: `${vendor}:${model}` };
+  let baseUrl = vendor === "openai" && customBaseUrl ? customBaseUrl : undefined;
+  if (baseUrl !== undefined) {
+    // Validate here, at resolution, rather than letting a bad value fail later at egress with
+    // egress_refused: it must be a plain http(s) URL whose host is exactly the one the operator
+    // allowed via DEEDS_ALLOW_HOST (that is the gate). Every other input is decided here, nowhere else.
+    let u: URL;
+    try { u = new URL(customBaseUrl); } catch { throw new DeedsError("usage", `DEEDS_OPENAI_BASE_URL is not a valid URL: ${customBaseUrl}`, EXIT.usage); }
+    if (u.protocol !== "http:" && u.protocol !== "https:") throw new DeedsError("usage", `DEEDS_OPENAI_BASE_URL must be http or https: ${customBaseUrl}`, EXIT.usage);
+    // Resolve the allowed host from the same env the caller handed us, not process.env, so this
+    // decides entirely from its inputs (every other input here is read from `env`).
+    const allowed = allowedExtraHost(env);
+    if (!allowed || u.hostname.toLowerCase() !== allowed.host) throw new DeedsError("usage", `DEEDS_OPENAI_BASE_URL host ${u.hostname} is not allowed; set DEEDS_ALLOW_HOST to that host[:port]`, EXIT.usage);
+  }
+  return { mode: "full", vendor, apiKey, model, baseUrl, modelId: `${vendor}:${model}` };
 }
 
 /**
