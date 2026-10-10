@@ -96,6 +96,41 @@ Check it worked:
 deeds version
 ```
 
+## Shell completion
+
+Deeds can complete command names, flags, `--mode` and `--vendor` choices, and local paths in Bash, Zsh, and Fish. The scripts use the shell's own completion system. Pressing Tab never runs deeds or calls a model.
+
+Global flags such as `--json` can appear between an option and its value. Completion follows the CLI's argument rules without treating filenames or model names as commands.
+
+For Bash, add this to your shell startup file:
+
+```sh
+eval "$(deeds completions bash)"
+```
+
+Bash preserves unfinished quoted values and adds argument separators only outside quotes.
+
+For Zsh, add this to `~/.zshrc` after completion initialization:
+
+```sh
+autoload -Uz compinit
+compinit
+eval "$(deeds completions zsh)"
+```
+
+If your Zsh configuration already runs `compinit`, only add the last line.
+
+For Fish, save the script in its completion directory:
+
+```fish
+mkdir -p ~/.config/fish/completions
+deeds completions fish > ~/.config/fish/completions/deeds.fish
+```
+
+To enable it in the current Fish session instead, run `deeds completions fish | source`. Regenerate a saved script after upgrading deeds.
+
+To run the completion checks, use `bun test` from `plugins/deeds/cli`. Native terminal checks require Python 3 and the shells being tested.
+
 ## Claude Code plugin
 
 The plugin bundles the CLI and a skill that knows how to run it, so you can ask in plain words.
@@ -120,6 +155,7 @@ deeds analyze [path | github.com/owner/repo] [--since 90d] [--until <date>] [--m
 deeds analyze-many <list-file> [--since 90d] [--until <date>] [--mode jev|full] [--out <dir>] [--json]
 deeds extract [path] [--rev <commit>] [--json]
 deeds help --json
+deeds completions <bash|zsh|fish> [--json]
 deeds doctor
 deeds version
 ```
