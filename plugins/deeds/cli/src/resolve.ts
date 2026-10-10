@@ -139,6 +139,8 @@ export interface ResolvedModel {
   vendor: Vendor;
   apiKey: string;
   model: string;
+  /** OpenAI-compatible base URL for the openai vendor; default https://api.openai.com/v1. */
+  baseUrl?: string;
   /** `<vendor>:<model>`, what the report names. */
   modelId: string;
 }
@@ -166,15 +168,23 @@ export function resolveJudge(flags: Pick<AnalyzeFlags, "mode" | "vendor" | "mode
   return { mode: "jev", apiKey };
 }
 
-/** Decide vendor, key and model for the full-model reference read (--mode full). */
+/** Decide vendor, key and model for the full-model reference read (--mode full).
+ * For a custom OpenAI-compatible endpoint set DEEDS_OPENAI_BASE_URL (e.g. http://pluto:40115/v1)
+ * and DEEDS_ALLOW_HOST to the endpoint's host[:port]; OPENAI_API_KEY may then be absent (a dummy is used).
+ */
 export function resolveModel(flags: Pick<AnalyzeFlags, "vendor" | "model">, env: Record<string, string | undefined>, home: string = env.HOME ?? homedir()): ResolvedModel {
   const keyFor = (v: Vendor) => env[KEY_ENV[v]] || configKey(v, home);
-  const vendor = flags.vendor ?? (keyFor("anthropic") ? "anthropic" : keyFor("openai") ? "openai" : undefined);
-  if (!vendor) throw new DeedsError("missing_key", "--mode full needs ANTHROPIC_API_KEY or OPENAI_API_KEY; deeds sends each commit's diff to that model with your own key", EXIT.usage);
-  const apiKey = keyFor(vendor);
-  if (!apiKey) throw new DeedsError("missing_key", `--vendor ${vendor} needs ${KEY_ENV[vendor]}; deeds sends each commit's diff to that model with your own key`, EXIT.usage);
+  const customBaseUrl = flags.vendor === "openai" || keyFor("anthropic") === undefined ? env.DEEDS_OPENAI_BASE_URL : undefined;
+  const vendor = flags.vendor ?? (keyFor("anthropic") ? "anthropic" : keyFor("openai") || customBaseUrl ? "openai" : undefined);
+  if (!vendor) throw new DeedsError("missing_key", "--mode full needs ANTHROPIC_API_KEY or OPENAI_API_KEY (or DEEDS_OPENAI_BASE_URL for a custom endpoint); deeds sends each commit's diff to that model with your own key", EXIT.usage);
+  let apiKey = keyFor(vendor);
+  if (!apiKey) {
+    if (vendor === "openai" && customBaseUrl) apiKey = "deeds-local";
+    else throw new DeedsError("missing_key", `--vendor ${vendor} needs ${KEY_ENV[vendor]}; deeds sends each commit's diff to that model with your own key`, EXIT.usage);
+  }
   const model = flags.model ?? env.DEEDS_MODEL ?? DEFAULT_MODEL[vendor];
-  return { mode: "full", vendor, apiKey, model, modelId: `${vendor}:${model}` };
+  const baseUrl = vendor === "openai" && customBaseUrl ? customBaseUrl : undefined;
+  return { mode: "full", vendor, apiKey, model, baseUrl, modelId: `${vendor}:${model}` };
 }
 
 /**

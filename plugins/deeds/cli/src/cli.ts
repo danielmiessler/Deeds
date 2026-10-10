@@ -20,6 +20,7 @@ import { existsSync } from "node:fs";
 import { basename, join } from "node:path";
 import { buildCatalog, type Catalog } from "./catalog.ts";
 import { type Command, type CommandContext, DeedsError, EXIT } from "./contract.ts";
+import { allowedExtraHost } from "./egress.ts";
 import { VENDOR_HOSTS } from "./vendors.ts";
 import { ANSI_SEQUENCES } from "./render.ts";
 import { terminalSafe } from "./terminal.ts";
@@ -92,8 +93,11 @@ const NO_SEQUENCES: ReadonlySet<string> = new Set();
 
 /** Run one command under its network policy and render the outcome. Never throws. */
 export async function runCommand(cmd: Command, ctx: CommandContext): Promise<Outcome> {
+  // The vendor allowlist, plus the single host an operator opted in via DEEDS_ALLOW_HOST (a local model endpoint).
+  const extra = cmd.network === "model" || cmd.network === "model+clone" ? allowedExtraHost() : undefined;
+  const allowed = [...VENDOR_HOSTS, ...(extra ? [extra.host] : [])];
   const restore = restrictNetwork(
-    cmd.network === "model" || cmd.network === "model+clone" ? VENDOR_HOSTS : [],
+    allowed,
     { gitHosts: cmd.network === "model+clone" ? ["github.com"] : [] },
   );
   try {

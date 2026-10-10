@@ -16,7 +16,21 @@ export class EgressError extends Error {
   }
 }
 
-/** Parse `input` and return the URL only if it is https, on an allowlisted host, with no userinfo or custom port. */
+/**
+ * `DEEDS_ALLOW_HOST` opts one host in beyond the vendor allowlist, as `host` (any port)
+ * or `host:port` (only that port), e.g. `pluto:40115` for a local OpenAI-compatible endpoint.
+ * For that host, http and a custom port are accepted; everything else keeps the
+ * https-only, port-443 posture. Read from the process environment at call time.
+ */
+export function allowedExtraHost(env: Record<string, string | undefined> = process.env): { host: string; port?: string } | undefined {
+  const raw = env.DEEDS_ALLOW_HOST;
+  if (typeof raw !== "string" || raw === "") return undefined;
+  const m = /^(?<h>[a-z0-9](?:[a-z0-9-]*[a-z0-9])?(?:\.[a-z0-9](?:[a-z0-9-]*[a-z0-9])?)*):?(?<p>\d+)?$/i.exec(raw.trim());
+  if (!m) return undefined;
+  return { host: m.groups!.h!.toLowerCase(), ...(m.groups.p ? { port: m.groups.p } : {}) };
+}
+
+/** Parse `input` and return the URL only if it is allowed: https, on an allowlisted host, no userinfo, no custom port — or on the host opted in by DEEDS_ALLOW_HOST. */
 export function assertAllowedHost(input: string | URL): URL {
   let url: URL;
   try {
@@ -24,12 +38,16 @@ export function assertAllowedHost(input: string | URL): URL {
   } catch {
     throw new EgressError(`refused: not a valid URL: ${String(input)}`);
   }
-  if (url.protocol !== "https:") throw new EgressError(`refused: ${url.protocol} is not https`);
   if (url.username !== "" || url.password !== "") throw new EgressError("refused: URL carries credentials");
-  if (url.port !== "") throw new EgressError(`refused: custom port ${url.port}`);
   const host = url.hostname.toLowerCase();
-  if (!(VENDOR_HOSTS as readonly string[]).includes(host)) {
-    throw new EgressError(`refused: host ${host} is not on the vendor allowlist`);
+  const extra = allowedExtraHost();
+  const onExtra = extra !== undefined && (extra.port === undefined ? host === extra.host : host === extra.host && url.port === extra.port);
+  if (!onExtra) {
+    if (!(VENDOR_HOSTS as readonly string[]).includes(host)) {
+      throw new EgressError(`refused: host ${host} is not on the vendor allowlist${extra ? ` (DEEDS_ALLOW_HOST=${extra.host}${extra.port ? `:${extra.port}` : ""})` : ""}`);
+    }
+    if (url.protocol !== "https:") throw new EgressError(`refused: ${url.protocol} is not https`);
+    if (url.port !== "") throw new EgressError(`refused: custom port ${url.port}`);
   }
   return url;
 }
