@@ -8,6 +8,7 @@ import { existsSync, readFileSync, statSync } from "node:fs";
 import { homedir } from "node:os";
 import { join, resolve as resolvePath } from "node:path";
 import { DeedsError, EXIT } from "./contract.ts";
+import { allowedExtraHost } from "./egress.ts";
 import { parseGithub } from "./git.ts";
 import type { Vendor } from "./model.ts";
 import { REPO_KINDS, type FactsOptions, type RepoKind } from "./jev/facts.ts";
@@ -190,7 +191,19 @@ export function resolveModel(flags: Pick<AnalyzeFlags, "vendor" | "model">, env:
     else throw new DeedsError("missing_key", `--vendor ${vendor} needs ${KEY_ENV[vendor]}; deeds sends each commit's diff to that model with your own key`, EXIT.usage);
   }
   const model = flags.model ?? env.DEEDS_MODEL ?? DEFAULT_MODEL[vendor];
-  const baseUrl = vendor === "openai" && customBaseUrl ? customBaseUrl : undefined;
+  let baseUrl = vendor === "openai" && customBaseUrl ? customBaseUrl : undefined;
+  if (baseUrl !== undefined) {
+    // Validate here, at resolution, rather than letting a bad value fail later at egress with
+    // egress_refused: it must be a plain http(s) URL whose host is exactly the one the operator
+    // allowed via DEEDS_ALLOW_HOST (that is the gate). Every other input is decided here, nowhere else.
+    let u: URL;
+    try { u = new URL(customBaseUrl); } catch { throw new DeedsError("usage", `DEEDS_OPENAI_BASE_URL is not a valid URL: ${customBaseUrl}`, EXIT.usage); }
+    if (u.protocol !== "http:" && u.protocol !== "https:") throw new DeedsError("usage", `DEEDS_OPENAI_BASE_URL must be http or https: ${customBaseUrl}`, EXIT.usage);
+    // Resolve the allowed host from the same env the caller handed us, not process.env, so this
+    // decides entirely from its inputs (every other input here is read from `env`).
+    const allowed = allowedExtraHost(env);
+    if (!allowed || u.hostname.toLowerCase() !== allowed.host) throw new DeedsError("usage", `DEEDS_OPENAI_BASE_URL host ${u.hostname} is not allowed; set DEEDS_ALLOW_HOST to that host[:port]`, EXIT.usage);
+  }
   return { mode: "full", vendor, apiKey, model, baseUrl, modelId: `${vendor}:${model}` };
 }
 
