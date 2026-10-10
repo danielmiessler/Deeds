@@ -1,0 +1,3 @@
+# Bun config for the deeds CLI. Every launcher passes --config=<this file>, so bun never reads a
+# bunfig.toml from the directory deeds runs in (usually the repository being analyzed), whose
+# `preload` entries would otherwise run before deeds starts. Keep this file free of preloads.

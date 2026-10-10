@@ -7,7 +7,7 @@ import { reportLines, toText } from "./render.ts";
 import { createHash } from "node:crypto";
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
-import { classifyCommit, replyUsage, type ModelFn } from "./classify.ts";
+import { classifyCommit, oneDeedPerKind, replyUsage, type ModelFn } from "./classify.ts";
 import { commitDiff, listCommits, type CommitInfo } from "./git.ts";
 import type { Deed } from "./schema.ts";
 import { tallyDeeds, type Tally } from "./totals.ts";
@@ -24,11 +24,23 @@ const RETIRED_FAST_SCHEME = "fast:fast-q1";
 
 export const CACHE_ROOT = `${process.env.HOME ?? "/tmp"}/.cache/deeds/classified`;
 
+/**
+ * Private-key armor, each block whole from its header through its END line, or through the end of the text when
+ * the END line is missing (the diff was cut, or the hunk stops inside the key). One pattern per format, so a
+ * header with no END line takes the rest of the text in one match instead of rescanning it from every header.
+ * - PEM and OpenPGP: five dashes, BEGIN, a label ending in PRIVATE KEY (OpenPGP adds BLOCK), five dashes.
+ * - SSH2 (RFC 4716 style): the same shape with four dashes and spaces inside them.
+ * - PuTTY .ppk: from `PuTTY-User-Key-File-<n>:` through the `Private-MAC:` line.
+ */
+export const KEY_ARMOR_BLOCKS: readonly RegExp[] = [
+  /-----BEGIN [A-Z0-9 ]*PRIVATE KEY(?: BLOCK)?-----(?:[\s\S]*?-----END [A-Z0-9 ]*PRIVATE KEY(?: BLOCK)?-----|[\s\S]*$)/g,
+  /---- BEGIN [A-Z0-9 ]*PRIVATE KEY ----(?:[\s\S]*?---- END [A-Z0-9 ]*PRIVATE KEY ----|[\s\S]*$)/g,
+  /PuTTY-User-Key-File-\d+:(?:[\s\S]*?Private-MAC:[^\n]*|[\s\S]*$)/g,
+];
+
 /** Secret-shaped strings recognisable on their own; each whole match is replaced. */
 const SECRET_PATTERNS: RegExp[] = [
-  /-----BEGIN [A-Z ]*PRIVATE KEY-----[\s\S]*?-----END [A-Z ]*PRIVATE KEY-----/g,
-  // A key with no END line (the diff was cut, or the hunk stops inside it): everything after BEGIN goes.
-  /-----BEGIN [A-Z ]*PRIVATE KEY-----[\s\S]*$/g,
+  ...KEY_ARMOR_BLOCKS,
   /\b(?:AKIA|ASIA)[0-9A-Z]{16}\b/g,
   /\b(?:sk|pk|rk)[-_](?:live|test|proj|ant)?[-_]?[A-Za-z0-9_-]{20,}\b/g,
   /\bgh[pousr]_[A-Za-z0-9]{30,}\b/g,
@@ -42,18 +54,126 @@ const SECRET_PATTERNS: RegExp[] = [
   // JSON Web Tokens: three base64url segments, the first two always starting with an encoded `{"`.
   /\beyJ[A-Za-z0-9_-]{8,}\.eyJ[A-Za-z0-9_-]{8,}\.[A-Za-z0-9_-]{8,}/g,
 ];
-/** Secrets known by their context: group 1 (the name or scheme) is kept, group 2 (the value) is replaced. */
+/**
+ * A password under a password-like name, whatever its length or characters: `db_password=hunter2 x!`,
+ * `password: "pass phrase"`, `DB_PASS=s3cr3t`. The name is the whole run of name characters and must end in
+ * password, passwd, passphrase, or a separate `pass` / `pwd` word (so `bypass`, `compass` and `cwd` do not
+ * count), then `=` or `:` (`==`, `===` and `=>` are not assignments), then an optional opening quote, escaped
+ * (`\"`) or not, in group 3. The value itself is read by redactPasswords(). Like the name=value patterns below,
+ * the name is taken in one step (`(?=(...))\2`), so the scan stays linear.
+ */
+const PASSWORD_NAME =
+  /(?<![A-Za-z0-9_.-])((?=([A-Za-z0-9_.-]+))\2(?<=passw(?:or)?d|passphrase|(?<![A-Za-z0-9])(?:pass|pwd)|[_.-](?:pass|pwd))\\?["']?[ \t]*[:=](?![=>])[ \t]*)(\\?["'`])?/gi;
+
+/** Where an unquoted password ends: a line break, a quote, or a `,`, `;` or space that starts the next `name:` / `name=`. */
+const PASSWORD_VALUE_END = /[\r\n"'`]|[,; \t](?=[ \t]*\\?["']?[A-Za-z_][A-Za-z0-9_.-]*\\?["']?[ \t]*[:=])/g;
+
+/**
+ * The end of a quoted password that starts at `p`: the matching quote `q` that is not itself escaped, or the end of the
+ * line. With `escaped`, the text is one level of string escaping deep (`"{\"password\": \"ab\\\"c\"}"`), so each
+ * `\x` pair is read as the character `x` first.
+ */
+function quotedPasswordEnd(text: string, p: number, q: string, escaped: boolean): number {
+  let i = p;
+  let innerEscape = false;
+  while (i < text.length && text[i] !== "\n" && text[i] !== "\r") {
+    const pair = escaped && text[i] === "\\" && i + 1 < text.length;
+    const ch = pair ? text[i + 1]! : text[i]!;
+    if (!innerEscape && ch === q) return i;
+    innerEscape = !innerEscape && ch === "\\";
+    i += pair ? 2 : 1;
+  }
+  return i;
+}
+
+/** Replace every password value (see PASSWORD_NAME), keeping its name, separator and quotes. */
+function redactPasswords(text: string, onRedact: () => void): string {
+  const re = new RegExp(PASSWORD_NAME.source, PASSWORD_NAME.flags);
+  let out = "";
+  let copied = 0;
+  for (let m = re.exec(text); m; m = re.exec(text)) {
+    const opener = m[3] ?? "";
+    const p = m.index + m[1]!.length + opener.length;
+    let end: number;
+    if (opener) {
+      end = quotedPasswordEnd(text, p, opener.at(-1)!, opener.length === 2);
+    } else {
+      PASSWORD_VALUE_END.lastIndex = p;
+      end = PASSWORD_VALUE_END.exec(text)?.index ?? text.length;
+    }
+    const value = text.slice(p, end);
+    if (value && value !== "[REDACTED]") {
+      out += text.slice(copied, p) + "[REDACTED]";
+      copied = end;
+      onRedact();
+    }
+    re.lastIndex = Math.max(end, m.index + 1);
+  }
+  return copied === 0 ? text : out + text.slice(copied);
+}
+
+/** Secrets known by their context: group 1 (the name or scheme) is kept, the rest of the match (the value) is replaced. */
 const SECRET_CONTEXTS: RegExp[] = [
   // `Authorization: Bearer <token>`, `Basic <base64>`.
   /(\b(?:Bearer|Basic|Token)\s+)([A-Za-z0-9._~+/-]{16,}=*)/g,
   // The password inside a URL: scheme://user:<password>@host.
   /(\b[a-z][a-z0-9+.-]*:\/\/[^/\s:@'"]+:)([^@\s/'"]{3,})(?=@)/gi,
+  // A password under a password-like name runs last, in redactPasswords().
+  // The two name=value patterns below are written to stay linear on long identifier runs: the name may only
+  // start where a run of name characters starts, a lookahead checks that the run holds a secret-like word, and
+  // `(?=(...))\2` takes the whole run at once without backtracking into it. They match what
+  // `[A-Za-z0-9_.-]*(?:key|...)[A-Za-z0-9_.-]*` would, without its quadratic retries.
   // A quoted value under a secret-like name: `api_key = "..."`, `"clientSecret": "..."`.
-  /([A-Za-z0-9_.-]*(?:key|secret|token|passw(?:or)?d|pwd|credential|auth|private)[A-Za-z0-9_.-]*["']?\s*[:=]\s*["'`])([^"'`\s]{12,})(?=["'`])/gi,
-  // An unquoted value under a secret-like name (.env files, shell exports, YAML). It must hold a digit, so
-  // ordinary code such as `authHeader = buildHeader(...)` is left intact.
-  /([A-Za-z0-9_.-]*(?:key|secret|token|passw(?:or)?d|pwd|credential|auth|private)[A-Za-z0-9_.-]*\s*[:=]\s*)(?=[A-Za-z0-9_+/=.-]*\d)([A-Za-z0-9_+/=.-]{12,})/gi,
+  /(?<![A-Za-z0-9_.-])((?=[A-Za-z0-9_.-]*?(?:key|secret|token|passw(?:or)?d|pwd|credential|auth|private))(?=([A-Za-z0-9_.-]+))\2["']?\s*[:=]\s*["'`])([^"'`\s]{12,})(?=["'`])/gi,
+  // The unquoted name=value case runs last, in redactUnquoted().
 ];
+
+/**
+ * An unquoted value under a secret-like name (.env files, shell exports, YAML): the name and separator, when at
+ * least 12 value characters follow. The value is the whole run of `[A-Za-z0-9_+/=.-]` after the separator, and it
+ * must hold a digit, so ordinary code such as `authHeader = buildHeader(...)` is left intact. The pattern used to
+ * check the digit with a lookahead that rescanned the value from every `name=` in a long run (`key=key=key=...`);
+ * redactUnquoted() reads the value's end and the next digit from tables built once per text instead.
+ */
+const UNQUOTED_NAME = /(?<![A-Za-z0-9_.-])((?=[A-Za-z0-9_.-]*?(?:key|secret|token|passw(?:or)?d|pwd|credential|auth|private))(?=([A-Za-z0-9_.-]+))\2\s*[:=]\s*)(?=[A-Za-z0-9_+/=.-]{12})/gi;
+const UNQUOTED_VALUE_CHAR = /[A-Za-z0-9_+/=.-]/;
+
+/**
+ * Apply the unquoted name=value rule exactly as the regex
+ * `<name>\s*[:=]\s*(?=[A-Za-z0-9_+/=.-]*\d)([A-Za-z0-9_+/=.-]{12,})` (global, case-insensitive) would: a start whose
+ * value has no digit is given up and the search goes on from the next character, as the regex engine does.
+ */
+function redactUnquoted(text: string, onRedact: () => void): string {
+  const re = new RegExp(UNQUOTED_NAME.source, UNQUOTED_NAME.flags);
+  let m = re.exec(text);
+  if (!m) return text;
+  const n = text.length;
+  // runEnd[i]: end of the value-character run starting at i; nextDigit[i]: first digit at or after i.
+  const runEnd = new Int32Array(n + 1);
+  const nextDigit = new Int32Array(n + 1);
+  runEnd[n] = n;
+  nextDigit[n] = n;
+  for (let i = n - 1; i >= 0; i--) {
+    const c = text[i]!;
+    runEnd[i] = UNQUOTED_VALUE_CHAR.test(c) ? runEnd[i + 1]! : i;
+    nextDigit[i] = c >= "0" && c <= "9" ? i : nextDigit[i + 1]!;
+  }
+  let out = "";
+  let copied = 0;
+  for (; m; m = re.exec(text)) {
+    const p = m.index + m[1]!.length;
+    const end = runEnd[p]!;
+    if (nextDigit[p]! < end) {
+      out += text.slice(copied, p) + "[REDACTED]";
+      copied = end;
+      re.lastIndex = end;
+      onRedact();
+    } else {
+      re.lastIndex = m.index + 1;
+    }
+  }
+  return copied === 0 ? text : out + text.slice(copied);
+}
 
 /** Replace every secret-shaped string in `text` before it leaves the machine, and count the replacements. */
 export function redactSecrets(text: string): { text: string; redactions: number } {
@@ -66,11 +186,16 @@ export function redactSecrets(text: string): { text: string; redactions: number 
     });
   }
   for (const re of SECRET_CONTEXTS) {
-    out = out.replace(re, (_m, head: string) => {
+    out = out.replace(re, (_m: string, head: string) => {
       redactions++;
       return `${head}[REDACTED]`;
     });
   }
+  out = redactUnquoted(out, () => redactions++);
+  // Passwords go last. Their value runs to the closing quote or the end of the line, so on a line such as
+  // `password: null, apiKey: "..."` it takes in the next name; run earlier, that left the key's value with no
+  // name in front of it for the rules above to recognise.
+  out = redactPasswords(out, () => redactions++);
   return { text: out, redactions };
 }
 
@@ -106,9 +231,13 @@ export interface Report {
   cached: number;
 }
 
-/** Monday of the ISO week containing `iso`, as YYYY-MM-DD. */
+/** The week key for a commit whose date cannot be read. */
+export const UNDATED_WEEK = "undated";
+
+/** Monday of the ISO week containing `iso`, as YYYY-MM-DD; UNDATED_WEEK when `iso` is not a date, rather than throwing. */
 export function weekOf(iso: string): string {
   const d = new Date(iso);
+  if (Number.isNaN(d.getTime())) return UNDATED_WEEK;
   const day = (d.getUTCDay() + 6) % 7;
   d.setUTCDate(d.getUTCDate() - day);
   return d.toISOString().slice(0, 10);
@@ -173,7 +302,8 @@ export async function analyzeRepo(opts: {
     try {
       if (existsSync(path)) {
         cached++;
-        return { ...c, deeds: JSON.parse(readFileSync(path, "utf8")) as Deed[] };
+        // A result cached before the one-per-kind limit is held to it as well.
+        return { ...c, deeds: oneDeedPerKind(JSON.parse(readFileSync(path, "utf8")) as Deed[]) };
       }
       const { files, diff } = commitDiff(opts.repo, c.sha);
       // A commit that changes nothing (a clean merge, an empty commit) is judged here: no change, no deeds.

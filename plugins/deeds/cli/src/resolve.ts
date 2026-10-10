@@ -33,6 +33,8 @@ export interface AnalyzeFlags {
   html?: string;
   /** Force colour on or off; unset means colour only on a terminal without NO_COLOR. */
   color?: boolean;
+  /** --allow-any-output: let --html / --out name a path outside the working directory or an existing non-report file. */
+  allowAnyOutput?: boolean;
 }
 
 /** Parse analyze's argv. Pure. */
@@ -59,6 +61,7 @@ export function parseAnalyzeArgs(args: string[]): AnalyzeFlags {
     else if (a === "--html") flags.html = val();
     else if (a === "--color") flags.color = true;
     else if (a === "--no-color") flags.color = false;
+    else if (a === "--allow-any-output") flags.allowAnyOutput = true;
     else if (a.startsWith("-")) throw new DeedsError("usage", `unknown option ${a}`, EXIT.usage);
     else flags.target = a;
   }

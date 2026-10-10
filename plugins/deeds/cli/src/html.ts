@@ -86,8 +86,11 @@ ${items}
 /** The whole page. `version` is the deeds version that made it; `generated` an ISO timestamp. */
 export function renderHtml(r: Report, opts: { version: string; generated: string }): string {
   const day = (iso: string | null) => iso?.slice(0, 10) ?? "–";
+  // A GitHub repo is titled owner/name ("golang/go" reads better than "go"); a local folder by its own name.
+  const gh = /^github\.com\/([^/]+\/[^/]+)$/.exec(r.repo.replace(/\/+$/, ""));
   const cut = r.repo.replace(/\/+$/, "").lastIndexOf("/");
-  const name = cut >= 0 ? r.repo.slice(cut + 1) : r.repo, where = cut >= 0 ? r.repo.slice(0, cut) : "";
+  const name = gh ? gh[1]! : cut >= 0 ? r.repo.slice(cut + 1) : r.repo;
+  const where = gh ? "github.com" : cut >= 0 ? r.repo.slice(0, cut) : "";
   const series = (k: "cap" | "fix" | "tend") => r.weeks.map((w) => w[k]);
   const cards = KINDS.map(([k, word, what]) => `<div class="card k-${k}"><div class="big">${r.totals[k]}</div><div class="label">${word}</div><div class="what">${what}</div>${spark(series(k), PALETTE[k])}</div>`).join("");
   const warn = r.failed.length
