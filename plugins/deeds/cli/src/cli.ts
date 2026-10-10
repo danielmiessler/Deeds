@@ -103,9 +103,12 @@ export async function runCommand(cmd: Command, ctx: CommandContext): Promise<Out
   try {
     const result = await cmd.run(ctx);
     if (ctx.json) return { exit: EXIT.ok, stdout: JSON.stringify({ ok: true, command: cmd.name, data: result.data }) + "\n" };
+    // A custom host is an operator choice beyond the vendor allowlist; say so in plain sight, because it
+    // changes the egress boundary and (for http) may send the diff and key unencrypted to that host.
+    const note = extra ? `note: egress to ${extra.host}${extra.port ? `:${extra.port}` : ""} allowed via DEEDS_ALLOW_HOST\n` : "";
     // Text output carries repository strings (author names, paths, boundary and cap names): escape every control
     // character except the renderer's own colour codes.
-    return { exit: EXIT.ok, stdout: terminalSafe(result.text ?? JSON.stringify(result.data, null, 2), ANSI_SEQUENCES) + "\n" };
+    return { exit: EXIT.ok, stdout: terminalSafe(note + (result.text ?? JSON.stringify(result.data, null, 2)), ANSI_SEQUENCES) + "\n" };
   } catch (err) {
     if (err instanceof NetworkDeniedError) return failure(ctx.json, cmd.name, err.code, err.message, EXIT.denied);
     if (err instanceof DeedsError) return failure(ctx.json, cmd.name, err.code, err.message, err.exit);

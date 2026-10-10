@@ -169,16 +169,23 @@ export function resolveJudge(flags: Pick<AnalyzeFlags, "mode" | "vendor" | "mode
 }
 
 /** Decide vendor, key and model for the full-model reference read (--mode full).
- * For a custom OpenAI-compatible endpoint set DEEDS_OPENAI_BASE_URL (e.g. http://pluto:40115/v1)
- * and DEEDS_ALLOW_HOST to the endpoint's host[:port]; OPENAI_API_KEY may then be absent (a dummy is used).
+ * A custom OpenAI-compatible endpoint is only used when the operator explicitly chose the openai
+ * vendor (`--vendor openai`): then set DEEDS_OPENAI_BASE_URL (e.g. http://pluto:40115/v1) and
+ * DEEDS_ALLOW_HOST to the endpoint's host[:port], and OPENAI_API_KEY may be absent (a dummy is used).
+ * An ambient DEEDS_OPENAI_BASE_URL never picks the vendor on its own, so it cannot silently
+ * redirect a run that was not asked to use a custom endpoint.
  */
 export function resolveModel(flags: Pick<AnalyzeFlags, "vendor" | "model">, env: Record<string, string | undefined>, home: string = env.HOME ?? homedir()): ResolvedModel {
   const keyFor = (v: Vendor) => env[KEY_ENV[v]] || configKey(v, home);
-  const customBaseUrl = flags.vendor === "openai" || keyFor("anthropic") === undefined ? env.DEEDS_OPENAI_BASE_URL : undefined;
-  const vendor = flags.vendor ?? (keyFor("anthropic") ? "anthropic" : keyFor("openai") || customBaseUrl ? "openai" : undefined);
-  if (!vendor) throw new DeedsError("missing_key", "--mode full needs ANTHROPIC_API_KEY or OPENAI_API_KEY (or DEEDS_OPENAI_BASE_URL for a custom endpoint); deeds sends each commit's diff to that model with your own key", EXIT.usage);
+  // The base URL is read only for an explicitly-chosen openai vendor, so it configures the endpoint
+  // but never selects the vendor.
+  const customBaseUrl = flags.vendor === "openai" ? env.DEEDS_OPENAI_BASE_URL : undefined;
+  const vendor = flags.vendor ?? (keyFor("anthropic") ? "anthropic" : keyFor("openai") ? "openai" : undefined);
+  if (!vendor) throw new DeedsError("missing_key", "--mode full needs ANTHROPIC_API_KEY or OPENAI_API_KEY (or --vendor openai with DEEDS_OPENAI_BASE_URL for a custom endpoint); deeds sends each commit's diff to that model with your own key", EXIT.usage);
   let apiKey = keyFor(vendor);
   if (!apiKey) {
+    // A custom endpoint does not validate the OpenAI key, so a placeholder is enough to pass the
+    // client's header check; the real trust boundary is DEEDS_ALLOW_HOST, not this value.
     if (vendor === "openai" && customBaseUrl) apiKey = "deeds-local";
     else throw new DeedsError("missing_key", `--vendor ${vendor} needs ${KEY_ENV[vendor]}; deeds sends each commit's diff to that model with your own key`, EXIT.usage);
   }
