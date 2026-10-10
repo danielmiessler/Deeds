@@ -11,12 +11,23 @@ export interface CommitInfo {
   sha: string;
   /** Author name after the repo's .mailmap is applied. */
   author: string;
-  /** Author date, ISO 8601. */
+  /** When the commit landed (committer date), ISO 8601. */
   date: string;
 }
 
 /** Largest diff sent for one commit; the rest is cut and the cut is stated in the diff itself. */
 export const MAX_DIFF_BYTES = 60_000;
+
+/**
+ * Cut a diff to at most MAX_DIFF_BYTES, at the last line break before the limit. Redaction runs after the
+ * cut, and a cut inside a token leaves a head that no longer matches any secret shape (a JWT without its
+ * signature, `ghp_` plus a few characters), so the cut must never split a line.
+ */
+export function cutDiff(diff: string): string {
+  if (diff.length <= MAX_DIFF_BYTES) return diff;
+  const nl = diff.lastIndexOf("\n", MAX_DIFF_BYTES - 1);
+  return nl >= 0 ? diff.slice(0, nl + 1) : "";
+}
 
 function git(repo: string, args: string[]): string {
   const r = Bun.spawnSync(["git", "-C", repo, ...args], { stdout: "pipe", stderr: "pipe" });
@@ -40,6 +51,14 @@ export function parseGithub(target: string): { owner: string; repo: string; url:
   return { owner, repo, url: `https://github.com/${owner}/${repo}.git` };
 }
 
+/**
+ * The environment for git commands that check files out in a cloned repository. The repository's own
+ * .gitattributes can select a filter driver the user configured globally; git-lfs's smudge then downloads
+ * from the host in the repository's .lfsconfig, which is any host its author likes. Deeds reads only git
+ * objects, never LFS content, so smudging is switched off.
+ */
+const CHECKOUT_ENV = { ...process.env, GIT_LFS_SKIP_SMUDGE: "1" };
+
 /** Clone a GitHub repository into the cache, or fetch it when it is already there. Returns the local path. */
 export function cloneOrFetch(gh: { owner: string; repo: string; url: string }): string {
   const dest = join(CLONE_ROOT, gh.owner, gh.repo);
@@ -52,32 +71,50 @@ export function cloneOrFetch(gh: { owner: string; repo: string; url: string }): 
       const re = Bun.spawnSync(["git", "-C", dest, "fetch", "--quiet", "--refetch", "origin"], { stdout: "ignore", stderr: "pipe" });
       if (re.exitCode !== 0) throw new DeedsError("git_failed", `could not fetch the full history of ${gh.owner}/${gh.repo}: ${re.stderr.toString().trim()}`, EXIT.error);
     }
-    const r = Bun.spawnSync(["git", "-C", dest, "fetch", "--quiet", "origin"], { stdout: "ignore", stderr: "pipe" });
+    const r = Bun.spawnSync(["git", "-C", dest, "fetch", "--quiet", "origin"], { stdout: "ignore", stderr: "pipe", env: CHECKOUT_ENV });
     if (r.exitCode !== 0) throw new DeedsError("git_failed", `could not update ${gh.owner}/${gh.repo}: ${r.stderr.toString().trim()}`, EXIT.error);
-    Bun.spawnSync(["git", "-C", dest, "reset", "--quiet", "--hard", "origin/HEAD"], { stdout: "ignore", stderr: "ignore" });
+    Bun.spawnSync(["git", "-C", dest, "reset", "--quiet", "--hard", "origin/HEAD"], { stdout: "ignore", stderr: "ignore", env: CHECKOUT_ENV });
     return dest;
   }
   mkdirSync(join(CLONE_ROOT, gh.owner), { recursive: true });
-  const r = Bun.spawnSync(["git", "clone", "--quiet", gh.url, dest], { stdout: "ignore", stderr: "pipe" });
+  const r = Bun.spawnSync(["git", "clone", "--quiet", gh.url, dest], { stdout: "ignore", stderr: "pipe", env: CHECKOUT_ENV });
   if (r.exitCode !== 0) throw new DeedsError("git_failed", `could not clone ${gh.owner}/${gh.repo}: ${r.stderr.toString().trim()}`, EXIT.error);
   return dest;
 }
 
 /**
- * Every commit authored inside the window on the current branch, merges included, oldest first. A merge's
+ * Every commit that landed inside the window on the current branch, merges included, oldest first. A merge's
  * diff (see commitDiff) holds only what the merge itself changed, so a change that arrives through a merge
  * is still counted once, at the commit that made it.
  */
 export function listCommits(repo: string, since: string, until?: string): CommitInfo[] {
-  const args = ["log", "--reverse", "--use-mailmap", `--since=${since}`, "--format=%H%x1f%aN%x1f%aI"];
+  // Dated by when the commit landed (committer date), the same date --since and --until select on, so a
+  // change written long before it merged (a review queue, a rebase) counts in the week it reached the product.
+  // The author name comes from the repository (its .mailmap or a commit ident) and may hold any byte but NUL,
+  // the 0x1f separator and newlines included. So records end in NUL (-z), and the two fields git writes in a
+  // fixed shape (sha, date) come first; everything after the second separator is the author.
+  const args = ["log", "-z", "--reverse", "--use-mailmap", `--since=${since}`, "--format=%H%x1f%cI%x1f%aN"];
   if (until) args.push(`--until=${until}`);
-  return git(repo, args)
-    .split("\n")
-    .filter(Boolean)
-    .map((line) => {
-      const [sha, author, date] = line.split("\x1f") as [string, string, string];
-      return { sha, author, date };
-    });
+  return parseCommitRecords(git(repo, args));
+}
+
+const SHA_RE = /^(?:[0-9a-f]{40}|[0-9a-f]{64})$/;
+
+/** Parse NUL-terminated `sha 0x1f date 0x1f author` records, skipping any whose sha or date is not well formed. */
+export function parseCommitRecords(out: string): CommitInfo[] {
+  const commits: CommitInfo[] = [];
+  for (const rec of out.split("\0")) {
+    const record = rec.replace(/^\n/, ""); // git log -z with --format may start a record with the separator newline
+    if (!record) continue;
+    const a = record.indexOf("\x1f");
+    const b = a < 0 ? -1 : record.indexOf("\x1f", a + 1);
+    if (b < 0) continue;
+    const sha = record.slice(0, a);
+    const date = record.slice(a + 1, b);
+    if (!SHA_RE.test(sha) || Number.isNaN(Date.parse(date))) continue;
+    commits.push({ sha, author: record.slice(b + 1), date });
+  }
+  return commits;
 }
 
 /**
@@ -87,6 +124,6 @@ export function listCommits(repo: string, since: string, until?: string): Commit
 export function commitDiff(repo: string, sha: string): { files: string[]; diff: string } {
   const files = git(repo, ["show", "--format=", "--name-only", sha]).split("\n").filter(Boolean);
   let diff = git(repo, ["show", "--format=", "--no-color", "--unified=3", sha]);
-  if (diff.length > MAX_DIFF_BYTES) diff = diff.slice(0, MAX_DIFF_BYTES) + `\n... diff cut at ${MAX_DIFF_BYTES} bytes of ${diff.length}\n`;
+  if (diff.length > MAX_DIFF_BYTES) diff = cutDiff(diff) + `... diff cut at ${MAX_DIFF_BYTES} bytes of ${diff.length}\n`;
   return { files, diff };
 }

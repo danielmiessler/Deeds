@@ -21,6 +21,8 @@ import { basename, join } from "node:path";
 import { buildCatalog, type Catalog } from "./catalog.ts";
 import { type Command, type CommandContext, DeedsError, EXIT } from "./contract.ts";
 import { VENDOR_HOSTS } from "./vendors.ts";
+import { ANSI_SEQUENCES } from "./render.ts";
+import { terminalSafe } from "./terminal.ts";
 import {
   ALLOW_UNSANDBOXED_FLAG,
   insideOsSandbox,
@@ -31,6 +33,23 @@ import {
 } from "./offline.ts";
 
 export const COMMANDS_DIR = join(import.meta.dir, "commands");
+
+/**
+ * The CLI's own bun config. bun reads `$cwd/bunfig.toml` unless `--config` names another file, and the cwd is
+ * usually the repository being analyzed, whose `preload` entries would run before deeds. Every bun this CLI
+ * starts is pinned to this file; a copy of the CLI without one gets an empty config.
+ */
+export const CLI_BUNFIG = existsSync(join(import.meta.dir, "..", "bunfig.toml")) ? join(import.meta.dir, "..", "bunfig.toml") : "/dev/null";
+
+/**
+ * The argv that re-runs this CLI under bun with the launchers' flags: no `.env` loading (the cwd's `.env` would
+ * otherwise set the environment of the child and every git it spawns) and the config pinned (as one `--config=`
+ * argument), then the entry and its arguments.
+ */
+export function reexecArgv(execPath: string, entry: string, argv: string[]): string[] {
+  return [execPath, "--no-env-file", `--config=${CLI_BUNFIG}`, entry, ...argv];
+}
+
 const NAME_RE = /^[a-z][a-z0-9-]*$/;
 
 /** Discover every `*.ts` command module in `dir`, validated and sorted by name. */
@@ -65,8 +84,11 @@ export interface Outcome {
 
 function failure(json: boolean, command: string, code: string, message: string, exit: number): Outcome {
   if (json) return { exit, stdout: JSON.stringify({ ok: false, command, error: { code, message } }) + "\n" };
-  return { exit, stdout: `deeds ${command}: ${message}\n` };
+  // The message can carry repository text (a path, git's stderr), so its control characters are escaped.
+  return { exit, stdout: terminalSafe(`deeds ${command}: ${message}`, NO_SEQUENCES) + "\n" };
 }
+
+const NO_SEQUENCES: ReadonlySet<string> = new Set();
 
 /** Run one command under its network policy and render the outcome. Never throws. */
 export async function runCommand(cmd: Command, ctx: CommandContext): Promise<Outcome> {
@@ -77,7 +99,9 @@ export async function runCommand(cmd: Command, ctx: CommandContext): Promise<Out
   try {
     const result = await cmd.run(ctx);
     if (ctx.json) return { exit: EXIT.ok, stdout: JSON.stringify({ ok: true, command: cmd.name, data: result.data }) + "\n" };
-    return { exit: EXIT.ok, stdout: (result.text ?? JSON.stringify(result.data, null, 2)) + "\n" };
+    // Text output carries repository strings (author names, paths, boundary and cap names): escape every control
+    // character except the renderer's own colour codes.
+    return { exit: EXIT.ok, stdout: terminalSafe(result.text ?? JSON.stringify(result.data, null, 2), ANSI_SEQUENCES) + "\n" };
   } catch (err) {
     if (err instanceof NetworkDeniedError) return failure(ctx.json, cmd.name, err.code, err.message, EXIT.denied);
     if (err instanceof DeedsError) return failure(ctx.json, cmd.name, err.code, err.message, err.exit);
@@ -121,7 +145,7 @@ export async function main(
   if ((cmd.network ?? "none") === "none" && !insideOsSandbox()) {
     if (osSandboxAvailable()) {
       // Re-execute under the OS network denial so spawned children are covered too.
-      const child = Bun.spawn(osSandboxArgv([process.execPath, import.meta.path, ...argv]), {
+      const child = Bun.spawn(osSandboxArgv(reexecArgv(process.execPath, import.meta.path, argv)), {
         cwd,
         stdin: "inherit",
         stdout: "inherit",

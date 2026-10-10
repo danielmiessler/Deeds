@@ -11,6 +11,7 @@
     {
       "name": "deeds",
       "source": "./plugins/deeds",
+      "version": "0.4.0",
       "description": "Ask for your deeds progress in plain words. Includes the deeds CLI and a skill that runs it."
     }
   ]
