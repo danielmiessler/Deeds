@@ -76,7 +76,7 @@ export async function runAnalyzeMany(ctx: Pick<CommandContext, "args" | "json" |
 const analyzeMany: Command = {
   name: "analyze-many",
   summary: "Analyze every repo a list file names and sum their caps, fixes and tends.",
-  usage: "deeds analyze-many <list-file> [--since 90d] [--until <date>] [--mode jev|full] [--out <dir>] [--allow-any-output] [--json]",
+  usage: "deeds analyze-many <list-file> [--since 90d] [--until <date>] [--mode clef|full] [--out <dir>] [--allow-any-output] [--json]",
   network: "model+clone",
   run: (ctx) => runAnalyzeMany(ctx),
 };

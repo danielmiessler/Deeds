@@ -4,9 +4,9 @@
  * Everything else in Deeds runs with the network denied (see offline.ts).
  */
 
-import { VENDOR_HOSTS } from "./vendors.ts";
+import { HOST_PATHS, VENDOR_HOSTS } from "./vendors.ts";
 
-export { VENDOR_HOSTS };
+export { HOST_PATHS, VENDOR_HOSTS };
 
 export class EgressError extends Error {
   readonly code = "egress_refused";
@@ -16,7 +16,10 @@ export class EgressError extends Error {
   }
 }
 
-/** Parse `input` and return the URL only if it is https, on an allowlisted host, with no userinfo or custom port. */
+/**
+ * Parse `input` and return the URL only if it is https, on an allowlisted host, with no userinfo or custom port.
+ * A host in HOST_PATHS is admitted only on a path its rule matches, with no query string and no fragment.
+ */
 export function assertAllowedHost(input: string | URL): URL {
   let url: URL;
   try {
@@ -30,6 +33,10 @@ export function assertAllowedHost(input: string | URL): URL {
   const host = url.hostname.toLowerCase();
   if (!(VENDOR_HOSTS as readonly string[]).includes(host)) {
     throw new EgressError(`refused: host ${host} is not on the vendor allowlist`);
+  }
+  const pathRule = HOST_PATHS[host];
+  if (pathRule && (!pathRule.test(url.pathname) || url.search !== "" || url.hash !== "")) {
+    throw new EgressError(`refused: ${host} is admitted only for its allowed API paths`);
   }
   return url;
 }

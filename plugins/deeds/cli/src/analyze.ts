@@ -5,20 +5,21 @@
  */
 import { reportLines, toText } from "./render.ts";
 import { createHash } from "node:crypto";
-import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
-import { join } from "node:path";
+import { existsSync, mkdirSync, readFileSync, renameSync, rmSync, writeFileSync } from "node:fs";
+import { dirname, join } from "node:path";
 import { classifyCommit, oneDeedPerKind, replyUsage, type ModelFn } from "./classify.ts";
 import { commitDiff, listCommits, type CommitInfo } from "./git.ts";
 import type { Deed } from "./schema.ts";
 import { tallyDeeds, type Tally } from "./totals.ts";
 
-/** full: one full-model read per commit (--mode full); jev: the judgment API, the default (src/jev/judge.ts). */
-export type AnalyzeMode = "full" | "jev";
+/** full: one full-model read per commit (--mode full); clef: Clef on Workers AI, the default (src/jev/judge.ts). */
+export type AnalyzeMode = "full" | "clef";
 /**
- * Every scheme a cache directory was ever keyed by. `fast` is the retired typed-question mode: its scheme stays
- * so its old entries keep their own directories and are never served to another mode.
+ * Every scheme a cache directory was ever keyed by. `fast` is the retired typed-question mode and `jev` the retired
+ * Jev judge (0.2.0 to 0.4.0): their schemes stay so their old entries keep their own directories and are never
+ * served to another mode or engine.
  */
-export type CacheScheme = AnalyzeMode | "fast";
+export type CacheScheme = AnalyzeMode | "jev" | "fast";
 /** The question-set version the retired fast mode keyed its cache with. */
 const RETIRED_FAST_SCHEME = "fast:fast-q1";
 
@@ -206,7 +207,7 @@ export interface CommitResult extends CommitInfo {
 
 export interface Report {
   repo: string;
-  /** jev: the judgment API, the default; full: one full-model read per commit. */
+  /** clef: Clef on Workers AI, the default; full: one full-model read per commit. */
   mode: AnalyzeMode;
   /** The model the run used, `<vendor>:<model>`. */
   model: string;
@@ -244,15 +245,52 @@ export function weekOf(iso: string): string {
 }
 
 /**
- * The cache key binds the canon, the model (in judgment mode, the judge version), the mode and the question set:
- * the question-system hash in judgment mode, the retired fast set version for fast, so no mode is served another's.
+ * The cache key binds the canon, the model, the mode and the question set. In a judgment scheme (clef, and the
+ * retired jev) the scheme names the engine and carries the question-system hash, so a judgment is never served to
+ * another engine or another system even when the system hash matches; the retired fast set keeps its own version.
  */
 export function cacheKey(canon: string, modelId: string, mode: CacheScheme, systemHash?: string): string {
-  if (mode === "jev" && !/^[0-9a-f]{64}$/.test(systemHash ?? "")) {
+  if ((mode === "clef" || mode === "jev") && !/^[0-9a-f]{64}$/.test(systemHash ?? "")) {
     throw new Error("cacheKey: judgment mode needs the question-system sha256");
   }
-  const scheme = mode === "jev" ? `jev:${systemHash}` : mode === "fast" ? RETIRED_FAST_SCHEME : "full";
+  const scheme = mode === "clef" || mode === "jev" ? `${mode}:${systemHash}` : mode === "fast" ? RETIRED_FAST_SCHEME : "full";
   return createHash("sha256").update(canon).update("\0").update(modelId).update("\0").update(scheme).digest("hex").slice(0, 16);
+}
+
+class InvariantViolation extends Error {}
+function invariant(ok: boolean, message: string): asserts ok {
+  if (!ok) throw new InvariantViolation(message);
+}
+
+/**
+ * A commit's cached deeds, or undefined when there are none. An entry that does not parse to a list (a write
+ * cut short by a kill or a full disk) is removed and treated as a miss, so a rerun judges the commit again.
+ */
+export function readCached(path: string): Deed[] | undefined {
+  if (!existsSync(path)) return undefined;
+  try {
+    const deeds: unknown = JSON.parse(readFileSync(path, "utf8"));
+    if (Array.isArray(deeds)) return deeds as Deed[];
+  } catch {
+    // fall through: unreadable entry
+  }
+  rmSync(path, { force: true });
+  return undefined;
+}
+
+/** Write a cache entry whole or not at all: a temp file in the same folder, then a rename over the entry. */
+export function writeCached(path: string, deeds: Deed[]): void {
+  invariant(Array.isArray(deeds), "writeCached: a cache entry is a list of deeds");
+  const body = JSON.stringify(deeds);
+  mkdirSync(dirname(path), { recursive: true });
+  const tmp = `${path}.${process.pid}.${Date.now()}.${Math.random().toString(36).slice(2)}.tmp`;
+  try {
+    writeFileSync(tmp, body);
+    renameSync(tmp, path);
+  } catch (err) {
+    rmSync(tmp, { force: true });
+    throw err;
+  }
 }
 
 function cachePath(sha: string, canon: string, modelId: string): string {
@@ -300,10 +338,11 @@ export async function analyzeRepo(opts: {
   const results = await pool(commits, opts.concurrency ?? 6, async (c): Promise<CommitResult> => {
     const path = cachePath(c.sha, opts.canon, opts.modelId);
     try {
-      if (existsSync(path)) {
+      const hit = readCached(path);
+      if (hit) {
         cached++;
         // A result cached before the one-per-kind limit is held to it as well.
-        return { ...c, deeds: oneDeedPerKind(JSON.parse(readFileSync(path, "utf8")) as Deed[]) };
+        return { ...c, deeds: oneDeedPerKind(hit) };
       }
       const { files, diff } = commitDiff(opts.repo, c.sha);
       // A commit that changes nothing (a clean merge, an empty commit) is judged here: no change, no deeds.
@@ -311,8 +350,7 @@ export async function analyzeRepo(opts: {
       const clean = redactSecrets(diff);
       redactions += clean.redactions;
       const deeds = await classifyCommit({ files, diff: clean.text }, { canon: opts.canon, model });
-      mkdirSync(join(path, ".."), { recursive: true });
-      writeFileSync(path, JSON.stringify(deeds));
+      writeCached(path, deeds);
       return { ...c, deeds };
     } catch (err) {
       return { ...c, deeds: [], error: err instanceof Error ? err.message : String(err) };

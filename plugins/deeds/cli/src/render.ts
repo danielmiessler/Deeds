@@ -84,7 +84,7 @@ export function reportLines(r: Report, opts: { maxCaps?: number; maxAuthors?: nu
 
   L.push([{ t: "deeds", s: "capBold" }, { t: "  " }, { t: r.repo, s: "head" }]);
   const cache = r.cached ? ` (${r.cached} cached)` : "";
-  L.push([{ t: `${day(r.window.first)} → ${day(r.window.last)}  ·  ${r.commits} commits${cache}  ·  judged by ${r.mode} (${r.model.replace(/^typesafe:/, "")})`, s: "dim" }]);
+  L.push([{ t: `${day(r.window.first)} → ${day(r.window.last)}  ·  ${r.commits} commits${cache}  ·  judged by ${r.mode} (${r.model.replace(/^cloudflare:/, "")})`, s: "dim" }]);
   blank();
 
   const totals: Line = [{ t: "  " }];

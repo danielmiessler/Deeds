@@ -1,133 +1,286 @@
 /**
- * Jev as the judge: each commit becomes a raw record (files and diff, never the message), code computes its
+ * Clef as the judge: each commit becomes a raw record (files and diff, never the message), code computes its
  * facts and state, and the question system's stages run in declared order, the way the workshop runner runs
  * them: a stage whose gate holds on the facts and the answers earlier stages returned sends all its questions in
  * one request. Later stages (cap_branch, fix_check, confirm) read earlier answers, so a commit makes one request
  * per stage that runs. The policy turns facts plus answers into cap, fix and tend outcomes, which become deeds.
  *
  * Each request carries only the state fields its stage reads, each cut to its declared cap, after redaction.
- * A state that still holds a secret shape is never sent: every stage gate reads secret_shape_remaining.
+ * A state that still holds a secret shape is never sent: every stage gate reads secret_shape_remaining, and every
+ * transport refuses a request carrying a secret-shaped string before any byte leaves (refuseSecrets).
+ *
+ * The question system is pluggable: commitJudge and judgeRepo take a `system` (default: the shipped system.json),
+ * and the cache key carries its hash, the engine and the model, so no judgment is served across any of the three.
  */
-import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
+import { createHash } from "node:crypto";
+import { appendFileSync, existsSync, readFileSync } from "node:fs";
 import { basename, join } from "node:path";
-import { CACHE_ROOT, cacheKey, redactSecrets, weekOf, type CommitResult, type Report } from "../analyze.ts";
+import { CACHE_ROOT, cacheKey, readCached, redactSecrets, weekOf, writeCached, type CommitResult, type Report } from "../analyze.ts";
 import { DeedsError, EXIT } from "../contract.ts";
 import { createModelClient, type FetchLike } from "../egress.ts";
 import { cutDiff, listCommits } from "../git.ts";
 import type { CapChange, Deed } from "../schema.ts";
 import { tallyDeeds } from "../totals.ts";
-import { JEV_ENDPOINT } from "./client.ts";
-import { computeFacts, resolveRepoKind, type FactsOptions, type RawFile, type RawRecord, type StateFields } from "./facts.ts";
+import { CLEF_MODEL_ID, CLEF_MODEL_NAME, clefEndpoint } from "./client.ts";
+import { computeFacts, hasSecretShape, resolveRepoKind, type FactsOptions, type RawFile, type RawRecord, type StateFields } from "./facts.ts";
 import { evaluate, stageRuns, truncateText, type Answer, type Answers, type PolicyQuestion, type PolicySystem } from "./policy.ts";
 import { nameCap, type NameInput } from "./names.ts";
-import { loadSystem, systemHash } from "./system.ts";
+import { loadSystem, systemHash, type QuestionSystem } from "./system.ts";
 
-/** The judge alias; the response names the versioned model that answered. */
-export const JEV_MODEL = "jev-latest";
-/** What the cache and an unanswered run name. The cache is bound to the system hash as well. */
-export const JEV_MODEL_ID = `typesafe:${JEV_MODEL}`;
-const TIMEOUT_MS = 60_000;
-const MAX_ATTEMPTS = 3;
-/** Commits judged at once. Git reads and Jev calls overlap, so a 700-commit history is judged in well under a minute at this width. */
+/** Commits judged at once. Git reads and judge calls overlap; a 429 from Workers AI is retried with backoff. */
 const DEFAULT_CONCURRENCY = 32;
+/** A judgment request carries a diff of up to ~100 KB; Clef answers in about a second, so this bounds a stall. */
+const TIMEOUT_MS = 60_000;
 const CAP_CHANGES: readonly string[] = ["new", "deepened", "regressed", "removed"];
+
+class InvariantViolation extends Error {}
+function invariant(condition: unknown, message: string): asserts condition {
+  if (!condition) throw new InvariantViolation(message);
+}
 
 type WireQuestion =
   | { type: "noul"; instructions: unknown; criteria?: unknown }
   | { type: "choice"; instructions: unknown; criteria: unknown }
   | { type: "score"; instructions: unknown; criteria: unknown };
 
-/** One judgment request: what goes over the wire, nothing else. */
-export interface JevRequest {
-  state: Record<string, string>;
+/** One judgment request, exactly the body that goes over the wire to Workers AI: the model selector, the state and the questions. */
+export interface JudgeRequest {
   model: string;
+  state: Record<string, string>;
   questions: Record<string, WireQuestion>;
 }
 
-export interface JevReply {
+export interface JudgeReply {
   model: string;
   answers: Record<string, Answer>;
   usage?: { input_tokens?: number | null; output_tokens?: number | null };
 }
 
-/** Sends one request; the live one posts to the judgment API through the egress client. */
-export type JevTransport = (req: JevRequest) => Promise<JevReply>;
+/** Sends one request; the live one posts to Clef on Workers AI through the egress client. */
+export type JudgeTransport = (req: JudgeRequest) => Promise<JudgeReply>;
 
-class RetryableError extends Error {}
-
-/** Check a reply carries an answer of the right type for every question asked. */
-export function checkReply(body: unknown, req: JevRequest): JevReply {
-  const b = body as Partial<JevReply> | null;
-  if (!b || typeof b.model !== "string" || !b.answers || typeof b.answers !== "object") throw new Error("Jev reply missing model or answers");
-  for (const [id, q] of Object.entries(req.questions)) {
-    const a = (b.answers as Record<string, Answer | undefined>)[id];
-    if (!a || a.type !== q.type) throw new Error(`Jev reply has no ${q.type} answer for "${id}"`);
-    if (a.type === "noul" && !(Number.isFinite(a.noul) && a.noul >= 0 && a.noul <= 1)) throw new Error(`Jev reply for "${id}" is not a probability`);
-    if (a.type === "choice" && typeof a.choice !== "string") throw new Error(`Jev reply for "${id}" has no choice`);
-    if (a.type === "score" && !Number.isFinite(a.score)) throw new Error(`Jev reply for "${id}" has no score`);
-  }
-  return b as JevReply;
+/** The two Cloudflare credentials a live run needs. Never logged, never in a request body. */
+export interface ClefCredentials {
+  accountId: string;
+  apiToken: string;
 }
 
-/** The live transport: POST to the judgment endpoint with the user's key, bounded by a timeout. */
-export function liveTransport(apiKey: string, fetchImpl?: FetchLike): JevTransport {
+/** A failure worth another attempt: a timeout, a network error, HTTP 429 or 5xx. `retryAfterMs` is the server's Retry-After. */
+export class RetryableError extends Error {
+  constructor(message: string, readonly retryAfterMs?: number) {
+    super(message);
+    this.name = "RetryableError";
+  }
+}
+
+/** A request refused before it left because a string in it still has a credential shape. Never retried. */
+export class SecretRefusedError extends Error {
+  readonly code = "secret_refused";
+  constructor() {
+    super("refused: a judgment request still carries a secret-shaped string, so it was not sent");
+    this.name = "SecretRefusedError";
+  }
+}
+
+/** Every string in a request: object keys and values, the state and the question text alike. */
+function stringsOf(v: unknown, out: string[] = []): string[] {
+  if (typeof v === "string") out.push(v);
+  else if (Array.isArray(v)) for (const x of v) stringsOf(x, out);
+  else if (v !== null && typeof v === "object") {
+    for (const [k, x] of Object.entries(v as Record<string, unknown>)) {
+      out.push(k);
+      stringsOf(x, out);
+    }
+  }
+  return out;
+}
+
+/** True when any string the request carries still has a credential shape the redaction knows. */
+export function carriesSecret(req: JudgeRequest): boolean {
+  return stringsOf(req).some(hasSecretShape);
+}
+
+/** Throw SecretRefusedError when the request carries a secret shape; every transport calls it before any byte leaves. */
+export function refuseSecrets(req: JudgeRequest): void {
+  if (carriesSecret(req)) throw new SecretRefusedError();
+}
+
+const isObj = (v: unknown): v is Record<string, unknown> => v !== null && typeof v === "object" && !Array.isArray(v);
+const isProb = (v: unknown): v is number => typeof v === "number" && Number.isFinite(v) && v >= 0 && v <= 1;
+
+/** Why an answer does not fit its question, or null when it does. A choice must name one of the question's options. */
+export function answerProblem(q: WireQuestion, a: unknown): string | null {
+  if (!isObj(a)) return "no answer";
+  if (a.type !== q.type) return `answer type ${String(a.type)} for a ${q.type} question`;
+  if (a.confidence !== undefined && !isProb(a.confidence)) return "confidence is not a probability";
+  if (a.probabilities !== undefined && !(isObj(a.probabilities) && Object.values(a.probabilities).every(isProb))) return "probabilities is not a map of probabilities";
+  if (a.type === "noul") return isProb(a.noul) ? null : "noul is not a probability";
+  if (a.type === "choice") {
+    if (typeof a.choice !== "string") return "choice is not a string";
+    return isObj(q.criteria) && !Object.hasOwn(q.criteria, a.choice) ? `choice "${a.choice}" is not an option` : null;
+  }
+  return typeof a.score === "number" && Number.isFinite(a.score) ? null : "score is not a number";
+}
+
+/**
+ * The reply from a Workers AI body: the REST envelope `{ success, errors, result: { model, answers, usage } }`, or a
+ * bare `{ model, answers, usage }`. Every question asked must carry an answer of its type; otherwise it throws.
+ */
+export function checkReply(body: unknown, req: JudgeRequest): JudgeReply {
+  if (!isObj(body)) throw new Error("Clef reply is not a JSON object");
+  if (body.success === false) throw new Error(`Clef reported failure: ${JSON.stringify(body.errors ?? null).slice(0, 200)}`);
+  const result = isObj(body.result) ? body.result : body;
+  if (!isObj(result.answers)) throw new Error("Clef reply missing answers");
+  const answers = result.answers;
+  for (const [id, q] of Object.entries(req.questions)) {
+    const problem = answerProblem(q, answers[id]);
+    if (problem) throw new Error(`Clef reply for "${id}": ${problem}`);
+  }
+  const model = typeof result.model === "string" && result.model !== "" ? result.model : req.model;
+  const reply: JudgeReply = { model, answers: answers as Record<string, Answer> };
+  if (isObj(result.usage)) reply.usage = result.usage as NonNullable<JudgeReply["usage"]>;
+  return reply;
+}
+
+/** Retry-After as milliseconds: delta-seconds or an HTTP date; undefined when absent or unreadable. */
+export function parseRetryAfter(header: string | null, now: number = Date.now()): number | undefined {
+  if (header === null || header.trim() === "") return undefined;
+  const secs = Number(header.trim());
+  if (Number.isFinite(secs) && secs >= 0) return secs * 1000;
+  const at = Date.parse(header);
+  return Number.isNaN(at) ? undefined : Math.max(0, at - now);
+}
+
+/** The live transport: POST to Clef in the user's Workers AI account with their token, bounded by a timeout. */
+export function liveTransport(creds: ClefCredentials, fetchImpl?: FetchLike, opts: { timeoutMs?: number } = {}): JudgeTransport {
   const client = createModelClient(fetchImpl ? { fetchImpl } : {});
+  const url = clefEndpoint(creds.accountId);
+  const scrub = (s: string) => s.split(creds.apiToken).join("***").split(creds.accountId).join("<account>");
   return async (req) => {
+    refuseSecrets(req);
     const ctl = new AbortController();
-    const timer = setTimeout(() => ctl.abort(), TIMEOUT_MS);
+    const timer = setTimeout(() => ctl.abort(), opts.timeoutMs ?? TIMEOUT_MS);
     try {
       let res: Response;
       try {
-        res = await client.request(JEV_ENDPOINT, {
+        res = await client.request(url, {
           method: "POST",
-          headers: { Authorization: `Bearer ${apiKey}`, "Content-Type": "application/json" },
+          headers: { Authorization: `Bearer ${creds.apiToken}`, "Content-Type": "application/json" },
           body: JSON.stringify(req),
           signal: ctl.signal,
         });
       } catch (err) {
         const name = (err as Error)?.name;
         if (name === "EgressError") throw err;
-        throw new RetryableError(`Jev ${name === "AbortError" ? "timeout" : "network error"}: ${(err as Error)?.message ?? String(err)}`);
+        throw new RetryableError(`Clef ${name === "AbortError" ? "timeout" : "network error"}: ${scrub((err as Error)?.message ?? String(err))}`);
       }
-      if (res.status === 429 || res.status >= 500) throw new RetryableError(`Jev HTTP ${res.status}`);
+      if (res.status === 429 || res.status >= 500) {
+        await res.body?.cancel().catch(() => undefined);
+        throw new RetryableError(`Clef HTTP ${res.status}`, parseRetryAfter(res.headers.get("retry-after")));
+      }
       if (res.status !== 200) {
-        const detail = (await res.text().catch(() => "")).slice(0, 200);
-        throw new Error(`Jev HTTP ${res.status}${detail ? `: ${detail}` : ""}`);
+        const detail = scrub((await res.text().catch(() => "")).slice(0, 200));
+        throw new Error(`Clef HTTP ${res.status}${detail ? `: ${detail}` : ""}`);
       }
-      return checkReply(await res.json(), req);
+      let body: unknown;
+      try {
+        body = await res.json();
+      } catch (err) {
+        if ((err as Error)?.name === "AbortError") throw new RetryableError("Clef timeout while reading the reply");
+        throw new Error("Clef reply was not JSON");
+      }
+      return checkReply(body, req);
     } finally {
       clearTimeout(timer);
     }
   };
 }
 
+/** Canonical JSON: object keys sorted at every depth, so equal requests always serialize alike. */
+function canonicalJson(v: unknown): string {
+  if (Array.isArray(v)) return `[${v.map(canonicalJson).join(",")}]`;
+  if (isObj(v)) return `{${Object.keys(v).sort().map((k) => `${JSON.stringify(k)}:${canonicalJson(v[k])}`).join(",")}}`;
+  return JSON.stringify(v) ?? "null";
+}
+
+/** The key a recorded reply is filed under: sha256 of the request's canonical JSON. */
+export function requestKey(req: JudgeRequest): string {
+  return createHash("sha256").update(canonicalJson(req)).digest("hex");
+}
+
 /**
- * Test seam: `DEEDS_JEV_RECORDING=<file>` replaces the network with a recorded reply. The file is one JSON
- * object `{ "model": "...", "answers": { "<question id>": <answer> } }`; each request gets the answers for the
- * questions it asked. When `DEEDS_JEV_CAPTURE=<file>` is also set, every request body is appended to it as one
- * JSON line, so a test can read exactly what would have left the machine.
+ * A recording file. Recorded from real Clef replies (scripts/record-clef.ts): `replies` maps each request's
+ * requestKey to the reply it got, and a request with no entry fails. A synthetic file instead holds one `answers`
+ * map by question id, and each request gets the answers for the questions it asked.
  */
-export function recordedTransport(recordingPath: string, capturePath?: string): JevTransport {
-  if (!existsSync(recordingPath)) throw new DeedsError("not_found", `DEEDS_JEV_RECORDING: no such file ${recordingPath}`, EXIT.usage);
-  const rec = JSON.parse(readFileSync(recordingPath, "utf8")) as JevReply;
+export interface Recording {
+  engine?: string;
+  model: string;
+  replies?: Record<string, { answers: Record<string, Answer>; usage?: JudgeReply["usage"] }>;
+  answers?: Record<string, Answer>;
+  usage?: JudgeReply["usage"];
+}
+
+/**
+ * Test seam: `DEEDS_CLEF_RECORDING=<file>` replaces the network with recorded replies (see Recording). When
+ * `DEEDS_CLEF_CAPTURE=<file>` is also set, every request body is appended to it as one JSON line, so a test can read
+ * exactly what would have left the machine. The secret refusal runs first, as it does on the live transport.
+ */
+export function recordedTransport(recordingPath: string, capturePath?: string): JudgeTransport {
+  if (!existsSync(recordingPath)) throw new DeedsError("not_found", `DEEDS_CLEF_RECORDING: no such file ${recordingPath}`, EXIT.usage);
+  const rec = JSON.parse(readFileSync(recordingPath, "utf8")) as Recording;
   return async (req) => {
-    if (capturePath) writeFileSync(capturePath, `${JSON.stringify(req)}\n`, { flag: "a" });
+    refuseSecrets(req);
+    if (capturePath) {
+      const line = JSON.stringify(req);
+      invariant(!line.includes("\n"), "recordedTransport: a captured request is one line");
+      appendFileSync(capturePath, `${line}\n`);
+    }
+    if (rec.replies) {
+      const hit = rec.replies[requestKey(req)];
+      if (!hit) throw new Error(`no recorded Clef reply for request ${requestKey(req).slice(0, 12)}; re-record with: bun run scripts/record-clef.ts`);
+      return checkReply({ model: rec.model, answers: hit.answers, ...(hit.usage ? { usage: hit.usage } : {}) }, req);
+    }
     const answers: Record<string, Answer> = {};
     for (const id of Object.keys(req.questions)) {
       const a = rec.answers?.[id];
       if (a) answers[id] = a;
     }
-    return checkReply({ model: rec.model, answers, usage: rec.usage }, req);
+    return checkReply({ model: rec.model, answers, ...(rec.usage ? { usage: rec.usage } : {}) }, req);
   };
 }
 
-async function withRetry<T>(fn: () => Promise<T>): Promise<T> {
+/** How a failed request is retried: bounded attempts, exponential backoff with jitter, Retry-After honoured up to the cap. */
+export interface RetryPolicy {
+  maxAttempts: number;
+  baseMs: number;
+  capMs: number;
+  sleep: (ms: number) => Promise<void>;
+  random: () => number;
+}
+
+export const DEFAULT_RETRY: RetryPolicy = {
+  maxAttempts: 5,
+  baseMs: 1000,
+  capMs: 30_000,
+  sleep: (ms) => new Promise((r) => setTimeout(r, ms)),
+  random: Math.random,
+};
+
+/** The wait before attempt `attempt + 1`: at least the server's Retry-After, never more than the cap. */
+export function retryDelay(attempt: number, retryAfterMs: number | undefined, p: RetryPolicy): number {
+  const backoff = p.baseMs * 2 ** (attempt - 1) * (0.5 + 0.5 * p.random());
+  return Math.min(p.capMs, Math.max(retryAfterMs ?? 0, backoff));
+}
+
+/** Run `fn`, retrying a RetryableError until it succeeds or `maxAttempts` attempts have failed; any other error fails at once. */
+export async function withRetry<T>(fn: () => Promise<T>, p: RetryPolicy = DEFAULT_RETRY): Promise<T> {
   for (let attempt = 1; ; attempt++) {
     try {
       return await fn();
     } catch (err) {
-      if (!(err instanceof RetryableError) || attempt >= MAX_ATTEMPTS) throw err;
-      await new Promise((r) => setTimeout(r, 500 * 2 ** (attempt - 1)));
+      if (!(err instanceof RetryableError) || attempt >= p.maxAttempts) throw err;
+      await p.sleep(retryDelay(attempt, err.retryAfterMs, p));
     }
   }
 }
@@ -152,7 +305,7 @@ const RENAME = ["--find-renames", "--find-copies-harder", "-l20000"];
 
 /** Files, counts and the redacted diff from the five git outputs; shared by the sync and async readers. */
 /**
- * The diff Jev sees: cut at whole lines past MAX_DIFF_BYTES, then marked with the line the facts read
+ * The diff the judge sees: cut at whole lines past MAX_DIFF_BYTES, then marked with the line the facts read
  * (`[diff truncated by deeds at K lines; M lines omitted]`), so a cut commit never reads as complete.
  */
 export function cutForJudge(diffOut: string): string {
@@ -241,17 +394,24 @@ export interface CommitJudge {
   stages: WireStage[];
   kind: ReturnType<typeof resolveRepoKind>;
   settings: FactsOptions;
-  transport: JevTransport;
+  transport: JudgeTransport;
+  retry: RetryPolicy;
 }
 
-export function commitJudge(transport: JevTransport, kind: CommitJudge["kind"], settings: FactsOptions = {}): CommitJudge {
-  const system = loadSystem() as unknown as PolicySystem & { state: StateFields };
-  if (system.stages.length === 0) throw new Error("src/jev/system.json has no stages");
+/** Options for commitJudge: another question system than the shipped one, another retry policy (tests). */
+export interface CommitJudgeOptions {
+  system?: QuestionSystem;
+  retry?: RetryPolicy;
+}
+
+export function commitJudge(transport: JudgeTransport, kind: CommitJudge["kind"], settings: FactsOptions = {}, opts: CommitJudgeOptions = {}): CommitJudge {
+  const system = (opts.system ?? loadSystem()) as unknown as PolicySystem & { state: StateFields };
+  if (system.stages.length === 0) throw new Error("the question system has no stages");
   const stages = system.stages.map((s) => {
-    if (s.questions.length === 0) throw new Error(`src/jev/system.json stage "${s.id}" has no questions`);
+    if (s.questions.length === 0) throw new Error(`question-system stage "${s.id}" has no questions`);
     return { id: s.id, questions: wireQuestions(s.questions), reads: [...new Set(s.questions.flatMap((q) => q.reads))] };
   });
-  return { system, stages, kind, settings, transport };
+  return { system, stages, kind, settings, transport, retry: opts.retry ?? DEFAULT_RETRY };
 }
 
 export interface JudgedCommit {
@@ -286,8 +446,8 @@ export async function judgeCommit(raw: RawRecord, j: CommitJudge): Promise<Judge
       if (v === undefined || !field) continue;
       state[f] = truncateText(v, field.max_chars, field.truncate ?? "head");
     }
-    const req: JevRequest = { state, model: JEV_MODEL, questions: stage.questions };
-    const reply = await withRetry(() => j.transport(req));
+    const req: JudgeRequest = { model: CLEF_MODEL_NAME, state, questions: stage.questions };
+    const reply = await withRetry(() => j.transport(req), j.retry);
     stagesRun.push(stage.id);
     model ??= reply.model;
     usage.input += reply.usage?.input_tokens ?? 0;
@@ -307,8 +467,11 @@ export interface JudgeOptions {
   since: string;
   until?: string;
   canon: string;
-  transport: JevTransport;
+  transport: JudgeTransport;
   settings?: FactsOptions;
+  /** The question system to judge with; defaults to the shipped system.json. */
+  system?: QuestionSystem;
+  retry?: RetryPolicy;
   concurrency?: number;
   /** Where judged commits are cached; defaults to the user cache. A run given a fresh folder is an uncached run. */
   cacheRoot?: string;
@@ -327,16 +490,17 @@ async function pool<T, R>(items: T[], limit: number, fn: (t: T) => Promise<R>): 
   return out;
 }
 
-/** Judge every commit in the window with Jev and report, in the same report shape as every other mode. */
+/** Judge every commit in the window with Clef and report, in the same report shape as every other mode. */
 export async function judgeRepo(opts: JudgeOptions): Promise<Report> {
-  const hash = systemHash(loadSystem());
+  const system = opts.system ?? loadSystem();
+  const hash = systemHash(system);
   const settings = opts.settings ?? {};
-  const cacheDir = join(opts.cacheRoot ?? CACHE_ROOT, cacheKey(opts.canon, JEV_MODEL_ID, "jev", hash));
+  const cacheDir = join(opts.cacheRoot ?? CACHE_ROOT, cacheKey(opts.canon, CLEF_MODEL_ID, "clef", hash));
 
   const commits = listCommits(opts.repo, opts.since, opts.until);
   const paths = git(opts.repo, ["ls-files"]).split("\n").filter(Boolean);
   const kind = resolveRepoKind(opts.repoName, paths, settings);
-  const judge = commitJudge(opts.transport, kind, settings);
+  const judge = commitJudge(opts.transport, kind, settings, { system, ...(opts.retry ? { retry: opts.retry } : {}) });
   let redactions = 0;
   let cached = 0;
   let done = 0;
@@ -347,9 +511,10 @@ export async function judgeRepo(opts: JudgeOptions): Promise<Report> {
   const results = await pool(commits, opts.concurrency ?? DEFAULT_CONCURRENCY, async (c): Promise<CommitResult> => {
     const path = join(cacheDir, `${c.sha}.json`);
     try {
-      if (existsSync(path)) {
+      const hit = readCached(path);
+      if (hit) {
         cached++;
-        return { ...c, deeds: JSON.parse(readFileSync(path, "utf8")) as Deed[] };
+        return { ...c, deeds: hit };
       }
       const { raw, redactions: n } = await rawRecordAsync(opts.repo, opts.repoName, c.sha);
       redactions += n;
@@ -359,8 +524,7 @@ export async function judgeRepo(opts: JudgeOptions): Promise<Report> {
       tokens.input += judged.usage.input;
       tokens.output += judged.usage.output;
       const deeds = judged.deeds;
-      mkdirSync(cacheDir, { recursive: true });
-      writeFileSync(path, JSON.stringify(deeds));
+      writeCached(path, deeds);
       return { ...c, deeds };
     } catch (err) {
       return { ...c, deeds: [], error: err instanceof Error ? err.message : String(err) };
@@ -384,8 +548,8 @@ export async function judgeRepo(opts: JudgeOptions): Promise<Report> {
   }
   return {
     repo: opts.label,
-    mode: "jev",
-    model: answeredBy ? `typesafe:${answeredBy}` : JEV_MODEL_ID,
+    mode: "clef",
+    model: answeredBy ? `cloudflare:${answeredBy}` : CLEF_MODEL_ID,
     complete: failed.length === 0,
     tokens,
     calls,

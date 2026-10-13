@@ -92,7 +92,7 @@ export function buildClassifyRequest(commit: CommitDiff, canon: string): ModelRe
   };
 }
 
-/** At most one deed of each kind, the first the reply gave, as Jev mode yields. */
+/** At most one deed of each kind, the first the reply gave, as the default judge yields. */
 export function oneDeedPerKind(deeds: Deed[]): Deed[] {
   const seen = new Set<string>();
   return deeds.filter((d) => !seen.has(d.kind) && (seen.add(d.kind), true));

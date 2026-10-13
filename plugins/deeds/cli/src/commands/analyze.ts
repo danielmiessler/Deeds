@@ -5,10 +5,10 @@ import { loadCanon } from "../canon.ts";
 import type { ModelFn } from "../classify.ts";
 import { type Command, type CommandContext, type CommandResult, DeedsError, EXIT, type JsonValue } from "../contract.ts";
 import { cloneOrFetch, isRepo } from "../git.ts";
-import { judgeRepo, liveTransport, recordedTransport, repoNameOf, type JevTransport } from "../jev/judge.ts";
+import { judgeRepo, liveTransport, recordedTransport, repoNameOf, type JudgeTransport } from "../jev/judge.ts";
 import { vendorModel } from "../model.ts";
 import { checkOutputPath, writeOutput } from "../outpath.ts";
-import { parseAnalyzeArgs, repoSettings, resolveJudge, resolveTarget, toSince, type ResolvedJudge, type ResolvedModel } from "../resolve.ts";
+import { parseAnalyzeArgs, repoSettings, resolveJudge, resolveTarget, toSince, type ResolvedClef, type ResolvedJudge, type ResolvedModel } from "../resolve.ts";
 
 export { toSince };
 
@@ -16,19 +16,19 @@ export { toSince };
 export interface AnalyzeDeps {
   env: Record<string, string | undefined>;
   makeModel: (r: ResolvedModel) => ModelFn;
-  makeJev: (apiKey: string, env: Record<string, string | undefined>) => JevTransport;
+  makeClef: (creds: ResolvedClef, env: Record<string, string | undefined>) => JudgeTransport;
 }
 
-/** The live Jev transport, or the recorded one when the DEEDS_JEV_RECORDING test seam names a file. */
-export function defaultJev(apiKey: string, env: Record<string, string | undefined>): JevTransport {
-  const recording = env.DEEDS_JEV_RECORDING;
-  return recording ? recordedTransport(recording, env.DEEDS_JEV_CAPTURE || undefined) : liveTransport(apiKey);
+/** The live Clef transport, or the recorded one when the DEEDS_CLEF_RECORDING test seam names a file. */
+export function defaultClef(creds: ResolvedClef, env: Record<string, string | undefined>): JudgeTransport {
+  const recording = env.DEEDS_CLEF_RECORDING;
+  return recording ? recordedTransport(recording, env.DEEDS_CLEF_CAPTURE || undefined) : liveTransport({ accountId: creds.accountId, apiToken: creds.apiToken });
 }
 
 export const liveDeps: AnalyzeDeps = {
   env: process.env,
   makeModel: (r) => vendorModel({ vendor: r.vendor, apiKey: r.apiKey, model: r.model }),
-  makeJev: defaultJev,
+  makeClef: defaultClef,
 };
 
 /** analyze, with every input resolved through resolve.ts. */
@@ -87,14 +87,14 @@ export async function analyzeTarget(
   const canon = loadCanon();
   if (!canon) throw new DeedsError("canon_missing", "the deed canon is missing from this install", EXIT.error);
   const window = { since: toSince(win.since), ...(win.until ? { until: win.until } : {}) };
-  return judge.mode === "jev"
+  return judge.mode === "clef"
     ? await judgeRepo({
       repo,
       repoName: repoNameOf(target),
       label: target.label,
       ...window,
       canon,
-      transport: deps.makeJev(judge.apiKey, deps.env),
+      transport: deps.makeClef(judge, deps.env),
       settings: repoSettings(deps.env),
       onProgress,
     })
@@ -104,7 +104,7 @@ export async function analyzeTarget(
 const analyze: Command = {
   name: "analyze",
   summary: "Read a repo's commit history over a window and report its caps, fixes and tends.",
-  usage: "deeds analyze [path | github.com/owner/repo] [--since 90d] [--until <date>] [--mode jev|full] [--vendor anthropic|openai] [--model <id>] [--html <file>] [--allow-any-output] [--color|--no-color] [--json]",
+  usage: "deeds analyze [path | github.com/owner/repo] [--since 90d] [--until <date>] [--mode clef|full] [--vendor anthropic|openai] [--model <id>] [--html <file>] [--allow-any-output] [--color|--no-color] [--json]",
   network: "model+clone",
   run: (ctx) => runAnalyze(ctx),
 };

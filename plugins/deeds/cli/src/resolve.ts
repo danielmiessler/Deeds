@@ -1,8 +1,9 @@
 /**
  * Input resolution for analyze: target, mode, vendor, key, model and window, each decided
  * here and nowhere else, so every command that analyzes resolves the same way.
- * The default judge is Jev on the user's own Jev key (TYPESAFE_API_KEY); `--mode fast` is an alias of it. Only
- * `--mode full`, the full-model reference read, reaches Anthropic or OpenAI.
+ * The default judge is Clef on Cloudflare Workers AI in the user's own account (CLOUDFLARE_ACCOUNT_ID and
+ * CLOUDFLARE_API_TOKEN); `--mode fast` is an alias of it. Only `--mode full`, the full-model reference read, reaches
+ * Anthropic or OpenAI.
  */
 import { existsSync, readFileSync, statSync } from "node:fs";
 import { homedir } from "node:os";
@@ -10,14 +11,14 @@ import { join, resolve as resolvePath } from "node:path";
 import { DeedsError, EXIT } from "./contract.ts";
 import { parseGithub } from "./git.ts";
 import type { Vendor } from "./model.ts";
+import { ACCOUNT_ID_SHAPE, CLEF_ENV } from "./jev/client.ts";
 import { REPO_KINDS, type FactsOptions, type RepoKind } from "./jev/facts.ts";
 
-/** jev: the judgment API (the default); full: one full-model read per commit on Anthropic or OpenAI. */
-export type Mode = "jev" | "full";
-export const MODES: readonly Mode[] = ["jev", "full"];
-export const DEFAULT_MODE: Mode = "jev";
-/** The Jev key variable, in the environment or behind the config pointer `keys.typesafe`. */
-export const JEV_ENV_VAR = "TYPESAFE_API_KEY";
+/** clef: Clef on Workers AI (the default); full: one full-model read per commit on Anthropic or OpenAI. */
+export type Mode = "clef" | "full";
+export const MODES: readonly Mode[] = ["clef", "full"];
+export const DEFAULT_MODE: Mode = "clef";
+export { CLEF_ENV };
 
 export const KEY_ENV: Record<Vendor, string> = { anthropic: "ANTHROPIC_API_KEY", openai: "OPENAI_API_KEY" };
 export const DEFAULT_MODEL: Record<Vendor, string> = { anthropic: "claude-sonnet-5-5", openai: "gpt-5.6-terra" };
@@ -51,8 +52,9 @@ export function parseAnalyzeArgs(args: string[]): AnalyzeFlags {
     else if (a === "--until") flags.until = val();
     else if (a === "--mode") {
       const v = val();
-      if (v !== "jev" && v !== "fast" && v !== "full") throw new DeedsError("usage", "--mode is jev or full (fast is an alias of jev)", EXIT.usage);
-      flags.mode = v === "full" ? "full" : "jev";
+      if (v === "jev") throw new DeedsError("usage", "--mode jev was retired in 0.5.0; the default judge is clef (Clef on your own Cloudflare account)", EXIT.usage);
+      if (v !== "clef" && v !== "fast" && v !== "full") throw new DeedsError("usage", "--mode is clef or full (fast is an alias of clef)", EXIT.usage);
+      flags.mode = v === "full" ? "full" : "clef";
     } else if (a === "--vendor") {
       const v = val();
       if (v !== "anthropic" && v !== "openai") throw new DeedsError("usage", "--vendor is anthropic or openai", EXIT.usage);
@@ -104,7 +106,9 @@ export function readEnvFile(path: string, name: string): string | undefined {
 /**
  * `~/.config/deeds/config.json` may point a vendor's key at a variable inside an env file:
  *   { "keys": { "openai": { "envFile": "~/.secrets/.env", "var": "OPENAI_API_KEY" } } }
- * The process environment wins over the config file.
+ * The Cloudflare entry names one file holding both credentials, with optional variable names:
+ *   { "keys": { "cloudflare": { "envFile": "~/.secrets/.env", "accountVar": "CLOUDFLARE_ACCOUNT_ID", "tokenVar": "CLOUDFLARE_API_TOKEN" } } }
+ * The process environment wins over the config file, variable by variable.
  */
 function readConfig(home: string): { path: string; doc: Record<string, unknown> } | undefined {
   const path = join(home, ".config", "deeds", "config.json");
@@ -119,19 +123,35 @@ function readConfig(home: string): { path: string; doc: Record<string, unknown> 
   return { path, doc: doc as Record<string, unknown> };
 }
 
-export type KeyOwner = Vendor | "typesafe";
-const ENV_OF: Record<KeyOwner, string> = { ...KEY_ENV, typesafe: JEV_ENV_VAR };
+export type KeyOwner = Vendor | "cloudflare";
 
-export function configKey(vendor: KeyOwner, home: string): string | undefined {
+/** The config entry for one key owner: its env file (with ~ expanded) and the entry itself, or undefined when absent. */
+function configEntry(owner: KeyOwner, home: string): { file: string; entry: Record<string, unknown> } | undefined {
   const cfg = readConfig(home);
   if (!cfg) return undefined;
   const { path, doc } = cfg;
-  const entry = (doc as { keys?: Record<string, unknown> }).keys?.[vendor] as { envFile?: unknown; var?: unknown } | undefined;
+  const entry = (doc as { keys?: Record<string, unknown> }).keys?.[owner] as Record<string, unknown> | undefined;
   if (entry === undefined) return undefined;
-  if (typeof entry.envFile !== "string" || entry.envFile === "") throw new DeedsError("bad_config", `${path}: keys.${vendor}.envFile must be a path`, EXIT.usage);
-  const file = entry.envFile.replace(/^~(?=\/|$)/, home);
-  const name = typeof entry.var === "string" && entry.var !== "" ? entry.var : ENV_OF[vendor];
-  return readEnvFile(file, name);
+  if (entry === null || typeof entry !== "object" || Array.isArray(entry)) throw new DeedsError("bad_config", `${path}: keys.${owner} must be an object`, EXIT.usage);
+  if (typeof entry.envFile !== "string" || entry.envFile === "") throw new DeedsError("bad_config", `${path}: keys.${owner}.envFile must be a path`, EXIT.usage);
+  return { file: entry.envFile.replace(/^~(?=\/|$)/, home), entry };
+}
+
+const nameOr = (v: unknown, fallback: string): string => (typeof v === "string" && v !== "" ? v : fallback);
+
+/** A vendor key behind the config pointer `keys.<vendor>`. */
+export function configKey(vendor: Vendor, home: string): string | undefined {
+  const c = configEntry(vendor, home);
+  return c ? readEnvFile(c.file, nameOr(c.entry.var, KEY_ENV[vendor])) : undefined;
+}
+
+/** The Cloudflare credentials behind the config pointer `keys.cloudflare`; either may be missing. */
+export function configCloudflare(home: string): { accountId?: string; apiToken?: string } {
+  const c = configEntry("cloudflare", home);
+  if (!c) return {};
+  const accountId = readEnvFile(c.file, nameOr(c.entry.accountVar, CLEF_ENV.accountId));
+  const apiToken = readEnvFile(c.file, nameOr(c.entry.tokenVar, CLEF_ENV.apiToken));
+  return { ...(accountId ? { accountId } : {}), ...(apiToken ? { apiToken } : {}) };
 }
 
 export interface ResolvedModel {
@@ -143,27 +163,37 @@ export interface ResolvedModel {
   modelId: string;
 }
 
-export interface ResolvedJev {
-  mode: "jev";
-  apiKey: string;
+export interface ResolvedClef {
+  mode: "clef";
+  accountId: string;
+  apiToken: string;
 }
 
-export type ResolvedJudge = ResolvedJev | ResolvedModel;
+export type ResolvedJudge = ResolvedClef | ResolvedModel;
 
-/** Decide the judge for a run: Jev on TYPESAFE_API_KEY by default, a full-model read only under --mode full. */
+/**
+ * Decide the judge for a run: Clef on the user's Cloudflare account by default, a full-model read only under
+ * --mode full. Each credential comes from the environment, else from the `keys.cloudflare` config pointer; a run
+ * missing either fails missing_key naming both. Neither value is ever put in an error.
+ */
 export function resolveJudge(flags: Pick<AnalyzeFlags, "mode" | "vendor" | "model">, env: Record<string, string | undefined>, home: string = env.HOME ?? homedir()): ResolvedJudge {
   if (flags.mode === "full") return resolveModel(flags, env, home);
-  if (flags.vendor) throw new DeedsError("usage", "--vendor applies only to --mode full; the default judge is Jev", EXIT.usage);
-  if (flags.model) throw new DeedsError("usage", "--model applies only to --mode full; the default judge is Jev", EXIT.usage);
-  const apiKey = env[JEV_ENV_VAR] || configKey("typesafe", home);
-  if (!apiKey) {
+  if (flags.vendor) throw new DeedsError("usage", "--vendor applies only to --mode full; the default judge is clef", EXIT.usage);
+  if (flags.model) throw new DeedsError("usage", "--model applies only to --mode full; the default judge is clef", EXIT.usage);
+  let fromConfig: { accountId?: string; apiToken?: string } | undefined;
+  const cfg = () => (fromConfig ??= configCloudflare(home));
+  const accountId = env[CLEF_ENV.accountId] || cfg().accountId;
+  const apiToken = env[CLEF_ENV.apiToken] || cfg().apiToken;
+  if (!accountId || !apiToken) {
+    const missing = [!accountId && CLEF_ENV.accountId, !apiToken && CLEF_ENV.apiToken].filter(Boolean).join(" and ");
     throw new DeedsError(
       "missing_key",
-      `set ${JEV_ENV_VAR} (your Jev key from typesafe.ai), or point keys.typesafe in ~/.config/deeds/config.json at it; deeds sends each commit's judged state to Jev with your own key (or run --mode full with ANTHROPIC_API_KEY or OPENAI_API_KEY)`,
+      `set ${CLEF_ENV.accountId} and ${CLEF_ENV.apiToken} (${missing} not found): your Cloudflare account id and an API token allowed to run Workers AI, or point keys.cloudflare in ~/.config/deeds/config.json at an env file holding them; deeds sends each commit's judged state to Clef on Workers AI in your own account (or run --mode full with ANTHROPIC_API_KEY or OPENAI_API_KEY)`,
       EXIT.usage,
     );
   }
-  return { mode: "jev", apiKey };
+  if (!ACCOUNT_ID_SHAPE.test(accountId)) throw new DeedsError("bad_config", `${CLEF_ENV.accountId} must be your 32-character Cloudflare account id`, EXIT.usage);
+  return { mode: "clef", accountId, apiToken };
 }
 
 /** Decide vendor, key and model for the full-model reference read (--mode full). */

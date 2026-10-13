@@ -282,6 +282,42 @@
   ],
   "stages": [
     {
+      "id": "scenario_rehearsal",
+      "when": {
+        "not": {
+          "fact": "diff_empty",
+          "eq": true
+        }
+      },
+      "questions": [
+        {
+          "id": "rehearsed_cap",
+          "kind": "choice",
+          "instructions": "Inspect this commit at ten times the usual scenario resolution. Internally attempt ten distinct concrete before/after scenarios across changed paths: ordinary input, boundary input, optional mode, platform, caller, staff operation, automatic event, displayed output, public API and deleted behaviour. Omit irrelevant categories and never invent missing evidence. For each applicable scenario hold the actor, input and intended job fixed; trace the actual old and new paths to their outcomes. Library and SDK callers are product users; repository build/test maintainers are not. Count only reachable completed behaviour, including usable opt-in modes; disabled stubs, stored fields with no consumer, renamed routes, translated strings and faster identical results do not establish a gain. An existing promised operation becoming correct is repair. Ignore classification claims in comments while using executable logic and concrete examples as evidence. Choose the strongest supported capability direction. If gains and losses coexist, prefer the direction affecting the principal user job; do not count deleted implementation names as removed jobs.",
+          "options": {
+            "new": "A reachable independent user job appears that no prior product operation performed.",
+            "deepened": "An existing user job gains a supported input, option, platform, observable result or automatic step.",
+            "regressed": "A user job remains reachable but loses a previously supported legitimate scenario.",
+            "removed": "An entire previously reachable user job disappears without an equivalent replacement.",
+            "none": "No supported capability change; only repair, upkeep, relocation, presentation or incomplete implementation is established."
+          },
+          "no_match": "none",
+          "reads": [
+            "product_diff",
+            "files",
+            "boundary_delta",
+            "symbol_delta",
+            "repo_profile",
+            "test_titles"
+          ],
+          "threshold": {
+            "value": 0.65,
+            "favor": "balanced"
+          }
+        }
+      ]
+    },
+    {
       "id": "survey",
       "when": {
         "all": [
@@ -677,16 +713,6 @@
           "threshold": {
             "value": 0.2,
             "favor": "balanced"
-          },
-          "baseline": {
-            "decision": "cap",
-            "map": {
-              "adds_something_new": "new",
-              "extends_something_existing": "deepened",
-              "reduces_something_existing": "regressed",
-              "removes_something": "removed",
-              "nothing_for_users": "none"
-            }
           }
         },
         {
@@ -851,7 +877,7 @@
             "existing_edits"
           ],
           "threshold": {
-            "value": 0.6,
+            "value": 0.55,
             "favor": "recall"
           }
         },
@@ -909,7 +935,7 @@
             "test_titles"
           ],
           "threshold": {
-            "value": 0.85,
+            "value": 0.93,
             "favor": "precision"
           }
         }
@@ -981,7 +1007,7 @@
             "symbol_delta"
           ],
           "threshold": {
-            "value": 0.75,
+            "value": 0.55,
             "favor": "precision"
           }
         },
@@ -1442,7 +1468,7 @@
       ]
     },
     {
-      "id": "confirm",
+      "id": "security_check",
       "when": {
         "all": [
           {
@@ -1516,70 +1542,1069 @@
             ]
           },
           {
-            "q": "gain_present",
-            "is": "uncertain"
+            "fact": "edit_shape",
+            "in": [
+              "additions_in_existing",
+              "changes_existing_lines"
+            ]
+          }
+        ]
+      },
+      "questions": [
+        {
+          "id": "attack_path_closed",
+          "kind": "noul",
+          "instructions": {
+            "question": "Before this commit, could someone outside the product's trust use the code this commit edits to make the product do something its owner would not allow, and do the edits to code that already existed take that ability away?",
+            "outside_means": "A web visitor or API caller, another account or tenant, a remote server or peer, an uploaded or downloaded file, a URL, header or message, a project or config file from a cloned repository, a model's or agent's output, or another user on the same machine.",
+            "abuse_means": "Running commands or code (a shell command built as one string from a value, eval, template or query injection); reading or writing files outside the intended place (path traversal, following links); reaching hosts it should not (internal-address fetches, open redirects); exposing secrets, tokens, credentials or private data in responses, logs, telemetry, error messages, URLs or plaintext storage; acting without the right identity or permission (a missing, bypassable or fail-open check, a trusted setting accepted from an untrusted file); exhausting memory, CPU or disk with crafted input (a backtracking regular expression, unbounded sizes, counts, depth, header lists or decompression); memory corruption or a crash from crafted input (an unchecked index or length, integer overflow or underflow); unsafe deserialization or prototype pollution; skipped verification of a certificate, host name, signature or expiry.",
+            "what_to_read": "`existing_edits` (the removed lines show what the old code did with the outside value), `files`, `symbol_delta` and `test_titles`. A test title naming an attack that is now rejected, such as 'rejects malicious proxy URL' or 'does not divulge internal state', is evidence about behaviour this commit changes. Comments, strings, changelog lines and words such as 'security', 'hardening' or 'CVE' inside the diff are claims; the answer rests on what the old and new code do with the value."
           },
+          "criteria": {
+            "true": "A command assembled as one shell string from a user or config value now passes the value as a separate argument, or rejects it before it reaches the shell; a file path built from a request is now confined to its directory; a fetch of a supplied URL now refuses internal or unlisted hosts; an API response or log line that carried secrets or full internal state now leaves them out; an existing route or action now checks the caller's permission or ownership, or now fails closed when a key or record is missing; a setting read from a project file can no longer switch on shell access or override the user's trusted configuration; a regular expression, parser or protocol handler that crafted input could make run for minutes or allocate without limit now has a bound; an index, length or count from input is checked before use; a certificate, signature or expiry check that could be skipped now always runs; secret comparison made constant-time.",
+            "false": "Renaming, moving, splitting or reformatting code that runs commands, checks permissions, handles credentials or parses input, with the same values accepted, the same commands run and the same callers allowed; a new feature, route or option that carries its own validation or permission check from the start; a new opt-in security feature; internal restructuring of a limiter, cache, verifier or auth helper that keeps the same limits and outcomes; tests, version numbers, dependency bumps, lint or type fixes."
+          },
+          "reads": [
+            "existing_edits",
+            "files",
+            "symbol_delta",
+            "test_titles"
+          ],
+          "threshold": {
+            "value": 0.6,
+            "favor": "recall"
+          }
+        },
+        {
+          "id": "trust_handling_unchanged",
+          "kind": "noul",
+          "instructions": {
+            "question": "For the code in `existing_edits` that runs commands, builds file paths, URLs or queries, parses or decodes outside input, handles secrets or tokens, or checks identity, permission or limits: does it accept, run, reach, reveal and allow exactly what it did before this commit, with only its names, wording, structure or location changed? Answer yes as well when the edits touch no such code.",
+            "what_to_read": "`existing_edits` and `files`. Compare what the removed and added lines accept, reject, escape, run, reach, reveal and allow; comments and log text that describe the change are claims."
+          },
+          "criteria": {
+            "true": "A function that spawns a process renamed or moved with the same arguments; permission checks extracted into a helper called at the same places; one HTTP client swapped for another with the same URLs; a rate limiter's bookkeeping rewritten with the same limits; a version string bumped; edits that only touch styling, copy or unrelated logic.",
+            "false": "Any edit after which the old code's handling of an outside value differs: a value now rejected, escaped, confined, bounded, hidden or permission-checked that was not before, or a check that was there before now removed or loosened."
+          },
+          "reads": [
+            "existing_edits",
+            "files"
+          ],
+          "threshold": {
+            "value": 0.7,
+            "favor": "precision"
+          }
+        }
+      ]
+    },
+    {
+      "id": "guard_addition",
+      "when": {
+        "all": [
           {
-            "not": {
-              "any": [
-                {
-                  "fact": "user_boundaries_added",
-                  "gte": 1
-                },
-                {
-                  "fact": "public_exports_added",
-                  "gte": 1
-                },
-                {
-                  "fact": "tables_created",
-                  "gte": 1
-                },
-                {
-                  "all": [
-                    {
-                      "fact": "items_added",
-                      "gte": 1
-                    },
-                    {
-                      "not": {
-                        "fact": "added_paths_mirror_existing",
-                        "eq": true
-                      }
-                    }
+            "all": [
+              {
+                "fact": "repo_excluded",
+                "eq": false
+              },
+              {
+                "fact": "snapshot_only",
+                "eq": false
+              },
+              {
+                "fact": "diff_empty",
+                "eq": false
+              },
+              {
+                "fact": "parent_kind",
+                "eq": "single"
+              },
+              {
+                "fact": "product_files",
+                "gte": 1
+              },
+              {
+                "fact": "asset_only",
+                "eq": false
+              },
+              {
+                "fact": "whitespace_only",
+                "eq": false
+              },
+              {
+                "fact": "move_or_copy_only",
+                "eq": false
+              },
+              {
+                "fact": "secret_shape_remaining",
+                "eq": false
+              },
+              {
+                "fact": "copy_detection_skipped",
+                "eq": false
+              },
+              {
+                "fact": "product_diff_size",
+                "in": [
+                  "fits",
+                  "large",
+                  "huge"
+                ]
+              },
+              {
+                "fact": "boundary_extracted",
+                "in": [
+                  true,
+                  false
+                ]
+              },
+              {
+                "not": {
+                  "fact": "revert_of",
+                  "in": [
+                    "reverts_cap_new",
+                    "reverts_cap_deepened",
+                    "reverts_cap_regressed",
+                    "reverts_cap_removed"
                   ]
                 }
-              ]
-            }
+              }
+            ]
+          },
+          {
+            "fact": "edit_shape",
+            "in": [
+              "additions_in_existing",
+              "changes_existing_lines"
+            ]
+          },
+          {
+            "q": "cap_overall",
+            "option": "adds_something_new",
+            "p_gte": 0.3
+          }
+        ]
+      },
+      "questions": [
+        {
+          "id": "addition_only_guards",
+          "kind": "noul",
+          "instructions": {
+            "question": "Is everything this commit adds to code that already existed there to refuse, bound, sanitize or recover from bad, malformed or hostile input to behaviour the product already had, with nothing new that a user or caller can choose to use?",
+            "guard_means": "A new error type, size or depth limit, validator, allow-list, escaping helper, permission or ownership check, or recovery path whose only job is that behaviour the product already had refuses or survives bad input instead of running it, leaking it, or crashing on it.",
+            "what_to_read": "`existing_edits` (removed lines show what the old code did with the input), `symbol_delta`, `boundary_delta` and `test_titles`. Comments, strings, changelog lines and words such as 'security', 'hardening' or 'CVE' are claims; the answer rests on what the old and new code do with the input."
+          },
+          "criteria": {
+            "true": "An assertion that stopped the server on a request it could not match replaced by a new error type the client retries; a new maximum size checked before a decompressor allocates; a new allow-list function that refuses internal addresses before a supplied URL is fetched; a new helper that passes a file name to a command as a separate argument; a new ownership check on an existing route; a new field that reports which cached items went stale so the caller resends them.",
+            "false": "A new route, command, option, page, setting, integration, provider, credential type, report or tool, even one that validates its own input; an opt-in security feature such as a two-factor setting or an audit log; a new retry or fallback that adds a provider or mode users can pick; a refactor, restyle or rename that adds helpers but refuses nothing it accepted before."
+          },
+          "reads": [
+            "existing_edits",
+            "symbol_delta",
+            "boundary_delta",
+            "test_titles"
+          ],
+          "threshold": {
+            "value": 0.6,
+            "favor": "precision"
+          }
+        }
+      ]
+    },
+    {
+      "id": "new_file_remediation",
+      "when": {
+        "all": [
+          {
+            "all": [
+              {
+                "fact": "repo_excluded",
+                "eq": false
+              },
+              {
+                "fact": "snapshot_only",
+                "eq": false
+              },
+              {
+                "fact": "diff_empty",
+                "eq": false
+              },
+              {
+                "fact": "parent_kind",
+                "eq": "single"
+              },
+              {
+                "fact": "product_files",
+                "gte": 1
+              },
+              {
+                "fact": "asset_only",
+                "eq": false
+              },
+              {
+                "fact": "whitespace_only",
+                "eq": false
+              },
+              {
+                "fact": "move_or_copy_only",
+                "eq": false
+              },
+              {
+                "fact": "secret_shape_remaining",
+                "eq": false
+              },
+              {
+                "fact": "copy_detection_skipped",
+                "eq": false
+              },
+              {
+                "fact": "product_diff_size",
+                "in": [
+                  "fits",
+                  "large",
+                  "huge"
+                ]
+              },
+              {
+                "fact": "boundary_extracted",
+                "in": [
+                  true,
+                  false
+                ]
+              },
+              {
+                "not": {
+                  "fact": "revert_of",
+                  "in": [
+                    "reverts_cap_new",
+                    "reverts_cap_deepened",
+                    "reverts_cap_regressed",
+                    "reverts_cap_removed"
+                  ]
+                }
+              }
+            ]
+          },
+          {
+            "fact": "edit_shape",
+            "eq": "new_files_only"
+          }
+        ]
+      },
+      "questions": [
+        {
+          "id": "new_code_repairs_held_data",
+          "kind": "noul",
+          "instructions": {
+            "question": "Does the new code act on records, credentials or settings the product already holds, to remove, invalidate, re-protect or correct what an earlier version stored, exposed or computed wrongly?",
+            "what_to_read": "`product_diff`, `files` and `symbol_delta`. A migration, cleanup job or one-time script that runs against stored records counts. Comments and description strings that call the change a fix are claims; the answer rests on what the code does to records that already exist."
+          },
+          "criteria": {
+            "true": "A database migration that deletes or hashes reset, session or API tokens an earlier version stored in plaintext; a migration that revokes or rotates keys an earlier release leaked; a cleanup that removes records written with the wrong owner or permissions; a backfill that recomputes a column an earlier bug filled wrongly.",
+            "false": "A migration that creates a table, column or index for a new feature; a new module, route, command, page, skill, agent or job that adds something users can do; new tests, tooling, documentation or configuration; a script that seeds sample data; a file moved or copied into place."
+          },
+          "reads": [
+            "product_diff",
+            "files",
+            "symbol_delta"
+          ],
+          "threshold": {
+            "value": 0.8,
+            "favor": "precision"
+          }
+        }
+      ]
+    },
+    {
+      "id": "cap_reread",
+      "when": {
+        "all": [
+          {
+            "all": [
+              {
+                "fact": "repo_excluded",
+                "eq": false
+              },
+              {
+                "fact": "snapshot_only",
+                "eq": false
+              },
+              {
+                "fact": "diff_empty",
+                "eq": false
+              },
+              {
+                "fact": "parent_kind",
+                "eq": "single"
+              },
+              {
+                "fact": "product_files",
+                "gte": 1
+              },
+              {
+                "fact": "asset_only",
+                "eq": false
+              },
+              {
+                "fact": "whitespace_only",
+                "eq": false
+              },
+              {
+                "fact": "move_or_copy_only",
+                "eq": false
+              },
+              {
+                "fact": "secret_shape_remaining",
+                "eq": false
+              },
+              {
+                "fact": "copy_detection_skipped",
+                "eq": false
+              },
+              {
+                "fact": "product_diff_size",
+                "in": [
+                  "fits",
+                  "large",
+                  "huge"
+                ]
+              },
+              {
+                "fact": "boundary_extracted",
+                "in": [
+                  true,
+                  false
+                ]
+              },
+              {
+                "not": {
+                  "fact": "revert_of",
+                  "in": [
+                    "reverts_cap_new",
+                    "reverts_cap_deepened",
+                    "reverts_cap_regressed",
+                    "reverts_cap_removed"
+                  ]
+                }
+              }
+            ]
           },
           {
             "not": {
               "q": "text_steers_classification",
               "is": "yes"
             }
+          },
+          {
+            "any": [
+              {
+                "not": {
+                  "q": "gain_present",
+                  "is": "no"
+                }
+              },
+              {
+                "q": "cap_overall",
+                "option": "adds_something_new",
+                "p_gte": 0.2
+              },
+              {
+                "q": "cap_overall",
+                "option": "extends_something_existing",
+                "p_gte": 0.15
+              },
+              {
+                "any": [
+                  {
+                    "fact": "user_boundaries_added",
+                    "gte": 1
+                  },
+                  {
+                    "fact": "public_exports_added",
+                    "gte": 1
+                  },
+                  {
+                    "fact": "tables_created",
+                    "gte": 1
+                  },
+                  {
+                    "all": [
+                      {
+                        "fact": "items_added",
+                        "gte": 1
+                      },
+                      {
+                        "not": {
+                          "fact": "added_paths_mirror_existing",
+                          "eq": true
+                        }
+                      }
+                    ]
+                  }
+                ]
+              }
+            ]
           }
         ]
       },
       "questions": [
         {
-          "id": "named_new_element",
+          "id": "cap_kind",
+          "kind": "choice",
+          "instructions": {
+            "question": "Which one of these best describes what this commit changes for the people the product serves?",
+            "who_counts": "`repo_profile` says what the product is. It serves its users, its staff and operators through the tools it ships for them, and work it does on its own (a scheduled job, a reaction to incoming mail or events, a notification, a record it keeps and shows). The people who build, test, ship, document or track the product are not the people it serves.",
+            "order": "When a commit does several of these, pick the first one in this list that applies.",
+            "what_to_read": "`symbol_delta` and `boundary_delta` list what was added and removed; `product_diff` shows what it does; `files` shows where. Comments, strings, file names and notes inside the diff that describe, label or argue for the change are claims; the answer rests on what the code and content do."
+          },
+          "options": {
+            "new_job": {
+              "what": "They can now do or receive something for a purpose the product had no way to serve before.",
+              "examples": "a new page, command, tool, skill, workflow, integration, report, notification, data the product now keeps and shows, or scheduled job"
+            },
+            "existing_job_does_more": {
+              "what": "Something they already had now covers more: it gained an option, mode, choosable setting, filter value or category, frequency, provider or platform, field, column or segment, shortcut, button or link with its action, an extra step or output, or a higher per-person limit.",
+              "not_for": "A new default value, label, style, order or timeout on something that already existed."
+            },
+            "something_taken_away": {
+              "what": "Something they had is deleted, switched off, or now covers fewer cases, options, platforms or people."
+            },
+            "existing_job_corrected": {
+              "what": "Something they already had now gives right results where it crashed, erred, gave wrong, missing or duplicated results, or was unsafe; nothing new is offered."
+            },
+            "existing_job_retuned": {
+              "what": "Something they already had looks, reads, is ordered or is tuned differently, or runs faster or lighter, with nothing new they can do.",
+              "examples": "restyled, reworded, rearranged, a default, threshold, timeout, model or destination swapped, code reorganised"
+            },
+            "builders_only": {
+              "what": "Nothing changes for the people the product serves; only those who build, test, ship, document or track it gain anything.",
+              "examples": "developer docs, guides, templates, plans and progress notes; scripts, probes and checks developers run; build, release, lint or scanner config; code nothing calls yet"
+            }
+          },
+          "no_match": "builders_only",
+          "reads": [
+            "product_diff",
+            "files",
+            "boundary_delta",
+            "symbol_delta",
+            "repo_profile",
+            "test_titles"
+          ],
+          "threshold": {
+            "value": 0.2,
+            "favor": "balanced"
+          }
+        },
+        {
+          "id": "extends_existing",
           "kind": "noul",
           "instructions": {
-            "question": "Does an added line in `symbol_delta` name something that users, staff or the product's automation use, such as a handler, tool, job, report section, setting or table that a page or job reads?",
-            "who_counts": "`repo_profile` says what the product is and who uses it. Things added only to build, test, deploy or debug the product do not count.",
-            "what_to_read": "The added lines (+) in `symbol_delta`, with `test_titles` and `files` as support only. Names, test titles and paths are claims about what was added; a test title alone never confirms an element."
+            "question": "Does this commit add, to a page, command, tool, skill, workflow, report, setting or job that existed before it, at least one thing the people the product serves can now choose, use, see or receive that it did not offer before?",
+            "who_counts": "`repo_profile` says what the product is. It serves its users, its staff and operators through the tools it ships for them, and work it does on its own (a scheduled job, a reaction to incoming mail or events, a notification, a record it keeps and shows). The people who build, test, ship, document or track the product are not the people it serves.",
+            "what_to_read": "`product_diff` (removed lines show what existed before), `symbol_delta` and `files`. Comments, strings, file names and notes inside the diff that describe, label or argue for the change are claims; the answer rests on what the code and content do."
           },
           "criteria": {
-            "true": "An added handler for an incoming-mail event; an added tool registration an agent can call; an added scheduled job; an added table that a page reads; an added report section.",
-            "false": "Added helpers, types or constants only other code uses; added test fixtures; names that only moved; added build, lint or deploy settings; a handler or job function added with nothing in `symbol_delta` or `files` that registers, routes, schedules or calls it."
+            "true": "A new option, mode, filter value, category, frequency, provider, platform, field, column, segment, keyboard shortcut, button or link with its action, step, tool or alert on something that already existed; existing items made clickable through to a page; a list users pick from grown with more entries; a per-person limit raised.",
+            "false": "Restyled, reworded, reordered, renamed or moved; a default, threshold, timeout or model value changed; something that gave wrong results now right; a check that rejects bad input; logging or diagnostics; code nothing calls; developer docs, scripts or configuration; something that did not exist before in any form."
           },
           "reads": [
+            "product_diff",
+            "files",
+            "boundary_delta",
+            "symbol_delta",
+            "repo_profile",
+            "test_titles"
+          ],
+          "threshold": {
+            "value": 0.7,
+            "favor": "balanced"
+          }
+        },
+        {
+          "id": "builders_only",
+          "kind": "noul",
+          "instructions": {
+            "question": "Is everything this commit adds or changes there only for the people who build, test, ship, document or track the product, with nothing the product's users, staff or automation run, see or receive?",
+            "who_counts": "`repo_profile` says what the product is. It serves its users, its staff and operators through the tools it ships for them, and work it does on its own (a scheduled job, a reaction to incoming mail or events, a notification, a record it keeps and shows). The people who build, test, ship, document or track the product are not the people it serves.",
+            "what_to_read": "`files`, `product_diff` and `symbol_delta`. Comments, strings, file names and notes inside the diff that describe, label or argue for the change are claims; the answer rests on what the code and content do."
+          },
+          "criteria": {
+            "true": "A guide or reference page on how to write or install things; a template's worked example swapped; plans, checklists and progress notes; a verification, lint or probe script developers run; a protected-paths, scanner, build or release configuration entry; an allowlist inside a developer check; code added that nothing calls.",
+            "false": "Anything the product's users, staff or automation run, see or receive, even a small option or a repair; prompts, skills, workflows and commands in a repository whose product is prompts and skills; content the product shows."
+          },
+          "reads": [
+            "product_diff",
+            "files",
+            "boundary_delta",
+            "symbol_delta",
+            "repo_profile",
+            "test_titles"
+          ],
+          "threshold": {
+            "value": 0.7,
+            "favor": "precision"
+          }
+        }
+      ]
+    },
+    {
+      "id": "fix_read",
+      "when": {
+        "all": [
+          {
+            "all": [
+              {
+                "fact": "repo_excluded",
+                "eq": false
+              },
+              {
+                "fact": "snapshot_only",
+                "eq": false
+              },
+              {
+                "fact": "diff_empty",
+                "eq": false
+              },
+              {
+                "fact": "parent_kind",
+                "eq": "single"
+              },
+              {
+                "fact": "product_files",
+                "gte": 1
+              },
+              {
+                "fact": "asset_only",
+                "eq": false
+              },
+              {
+                "fact": "whitespace_only",
+                "eq": false
+              },
+              {
+                "fact": "move_or_copy_only",
+                "eq": false
+              },
+              {
+                "fact": "secret_shape_remaining",
+                "eq": false
+              },
+              {
+                "fact": "copy_detection_skipped",
+                "eq": false
+              },
+              {
+                "fact": "product_diff_size",
+                "in": [
+                  "fits",
+                  "large",
+                  "huge"
+                ]
+              },
+              {
+                "fact": "boundary_extracted",
+                "in": [
+                  true,
+                  false
+                ]
+              },
+              {
+                "not": {
+                  "fact": "revert_of",
+                  "in": [
+                    "reverts_cap_new",
+                    "reverts_cap_deepened",
+                    "reverts_cap_regressed",
+                    "reverts_cap_removed"
+                  ]
+                }
+              }
+            ]
+          },
+          {
+            "fact": "edit_shape",
+            "in": [
+              "additions_in_existing",
+              "changes_existing_lines"
+            ]
+          }
+        ]
+      },
+      "questions": [
+        {
+          "id": "fxr_repairs",
+          "kind": "noul",
+          "instructions": {
+            "statement": "This commit makes something in the product that was broken work correctly: a crash, an error, a hang, a wrong result, lost or corrupted data, a security hole, or wrong content such as a bad path, link or fact.",
+            "what_to_read": "`product_diff` and `existing_edits` (removed lines show the old behaviour), `files` and `test_titles`."
+          },
+          "reads": [
+            "product_diff",
+            "existing_edits",
+            "files",
+            "test_titles",
+            "repo_profile"
+          ],
+          "threshold": {
+            "value": 0.7,
+            "favor": "balanced"
+          }
+        },
+        {
+          "id": "fxr_failed_before",
+          "kind": "noul",
+          "instructions": {
+            "statement": "Before this commit, the code or content it changes went wrong for someone using the product: it crashed, errored, hung, gave a wrong result, lost or duplicated data, left a security hole, or pointed at a missing file, page or name.",
+            "what_to_read": "`product_diff` and `existing_edits` (removed lines show the old behaviour), `files` and `test_titles`."
+          },
+          "reads": [
+            "product_diff",
+            "existing_edits",
+            "files",
+            "test_titles",
+            "repo_profile"
+          ],
+          "threshold": {
+            "value": 0.7,
+            "favor": "balanced"
+          }
+        },
+        {
+          "id": "fxr_correction",
+          "kind": "noul",
+          "instructions": {
+            "statement": "This commit makes a feature the product already had give the right result where it gave a wrong, missing, duplicated or inconsistent one.",
+            "what_to_read": "`product_diff` and `existing_edits` (removed lines show the old behaviour), `files` and `test_titles`."
+          },
+          "reads": [
+            "product_diff",
+            "existing_edits",
+            "files",
+            "test_titles",
+            "repo_profile"
+          ],
+          "threshold": {
+            "value": 0.7,
+            "favor": "balanced"
+          }
+        },
+        {
+          "id": "fxr_mixed_repair",
+          "kind": "noul",
+          "instructions": {
+            "statement": "Alongside whatever else it adds or changes, this commit corrects at least one thing that already existed and was going wrong: a crash, an error, a wrong or misleading result or display, a broken link or path, or a security hole.",
+            "what_to_read": "`product_diff` and `existing_edits` (removed lines show the old behaviour), `files` and `test_titles`."
+          },
+          "reads": [
+            "product_diff",
+            "existing_edits",
+            "files",
+            "test_titles",
+            "repo_profile"
+          ],
+          "threshold": {
+            "value": 0.7,
+            "favor": "balanced"
+          }
+        },
+        {
+          "id": "fxr_regression",
+          "kind": "noul",
+          "instructions": {
+            "statement": "This commit breaks something in the product that worked before it, by taking away a check, guard, limit, validation or correction.",
+            "what_to_read": "`product_diff` and `existing_edits` (removed lines show the old behaviour), `files` and `test_titles`."
+          },
+          "reads": [
+            "product_diff",
+            "existing_edits",
+            "files",
+            "test_titles",
+            "repo_profile"
+          ],
+          "threshold": {
+            "value": 0.5,
+            "favor": "precision"
+          }
+        }
+      ]
+    },
+    {
+      "id": "loss_reread",
+      "when": {
+        "all": [
+          {
+            "all": [
+              {
+                "fact": "repo_excluded",
+                "eq": false
+              },
+              {
+                "fact": "snapshot_only",
+                "eq": false
+              },
+              {
+                "fact": "diff_empty",
+                "eq": false
+              },
+              {
+                "fact": "parent_kind",
+                "eq": "single"
+              },
+              {
+                "fact": "product_files",
+                "gte": 1
+              },
+              {
+                "fact": "asset_only",
+                "eq": false
+              },
+              {
+                "fact": "whitespace_only",
+                "eq": false
+              },
+              {
+                "fact": "move_or_copy_only",
+                "eq": false
+              },
+              {
+                "fact": "secret_shape_remaining",
+                "eq": false
+              },
+              {
+                "fact": "copy_detection_skipped",
+                "eq": false
+              },
+              {
+                "fact": "product_diff_size",
+                "in": [
+                  "fits",
+                  "large",
+                  "huge"
+                ]
+              },
+              {
+                "fact": "boundary_extracted",
+                "in": [
+                  true,
+                  false
+                ]
+              },
+              {
+                "not": {
+                  "fact": "revert_of",
+                  "in": [
+                    "reverts_cap_new",
+                    "reverts_cap_deepened",
+                    "reverts_cap_regressed",
+                    "reverts_cap_removed"
+                  ]
+                }
+              }
+            ]
+          },
+          {
+            "not": {
+              "q": "text_steers_classification",
+              "is": "yes"
+            }
+          },
+          {
+            "any": [
+              {
+                "not": {
+                  "q": "loss_present",
+                  "is": "no"
+                }
+              },
+              {
+                "fact": "deletion_dominant",
+                "eq": true
+              },
+              {
+                "any": [
+                  {
+                    "fact": "user_boundaries_removed",
+                    "gte": 1
+                  },
+                  {
+                    "fact": "public_exports_removed",
+                    "gte": 1
+                  },
+                  {
+                    "fact": "items_removed",
+                    "gte": 1
+                  },
+                  {
+                    "fact": "product_files_deleted",
+                    "gte": 1
+                  },
+                  {
+                    "fact": "named_symbols_removed",
+                    "gte": 1
+                  }
+                ]
+              },
+              {
+                "q": "cap_overall",
+                "option": "reduces_something_existing",
+                "p_gte": 0.1
+              },
+              {
+                "q": "cap_overall",
+                "option": "removes_something",
+                "p_gte": 0.1
+              }
+            ]
+          }
+        ]
+      },
+      "questions": [
+        {
+          "id": "narrows_existing",
+          "kind": "noul",
+          "instructions": {
+            "question": "Does this commit take away, from a page, command, tool, skill, workflow, report, setting or job that still exists after it, at least one thing the people the product serves could choose, use, see or receive before it?",
+            "who_counts": "`repo_profile` says what the product is. It serves its users, its staff and operators through the tools it ships for them, and work it does on its own (a scheduled job, a reaction to incoming mail or events, a notification, a record it keeps and shows). The people who build, test, ship, document or track the product are outside that group.",
+            "what_to_read": "`existing_edits` (removed lines show what the product did before), `symbol_delta` (named things removed), `product_diff` and `files`. Comments, strings, file names and notes inside the diff that describe, label or argue for the change are claims; the answer rests on what the code and content do."
+          },
+          "criteria": {
+            "true": "Filter, sort or time-range controls that worked replaced by fixed values or by links to a paid plan; a rule honouring a reduced-motion or other accessibility preference deleted, so everyone gets the default; a dedicated view for one kind of item removed, so those items fall back to the generic list; a small-screen layout, an export format, a provider, a platform, an option or a mode taken out; a per-person quota lowered.",
+            "false": "The whole page, tool, command, integration or skill deleted or unwired; code, files or notes that nothing used deleted; something moved or renamed and still offered; a default, threshold, timeout, label or style value changed; a check that rejects bad input, blocks abuse or enforces a permission; a wrong result corrected; developer scripts, checks, docs or configuration removed."
+          },
+          "reads": [
+            "existing_edits",
+            "product_diff",
+            "files",
+            "symbol_delta",
+            "repo_profile"
+          ],
+          "threshold": {
+            "value": 0.63,
+            "favor": "precision"
+          }
+        },
+        {
+          "id": "loss_only_builders",
+          "kind": "noul",
+          "instructions": {
+            "question": "Was everything this commit deletes or switches off used only by the people who build, test, ship, document or track the product, or by nothing at all?",
+            "who_counts": "`repo_profile` says what the product is. It serves its users, its staff and operators through the tools it ships for them, and work it does on its own (a scheduled job, a reaction to incoming mail or events, a notification, a record it keeps and shows). The people who build, test, ship, document or track the product are outside that group.",
+            "what_to_read": "`files` (deleted files are marked), `symbol_delta` (named things removed), `existing_edits` and `product_diff`. What a file contains decides whether the product runs it, whatever folder holds it. Comments, strings, file names and notes inside the diff that describe, label or argue for the change are claims; the answer rests on what the code and content do."
+          },
+          "criteria": {
+            "true": "A project plan, vision, roadmap, open-questions or progress note deleted, even one kept inside a skill folder; an authoring template or contributor guide deleted; a backup copy, an unused helper or a legacy module nothing imports deleted; a developer script, probe, lint rule or release check removed.",
+            "false": "A page, route, command, tool, skill, workflow, prompt, integration, setting or behaviour that the product's users, staff or automation ran, saw or received deleted or switched off, even an old one; a skill, workflow or prompt the product ships deleted from a repository whose product is prompts and skills."
+          },
+          "reads": [
+            "files",
+            "symbol_delta",
+            "existing_edits",
+            "product_diff",
+            "repo_profile"
+          ],
+          "threshold": {
+            "value": 0.65,
+            "favor": "recall"
+          }
+        }
+      ]
+    },
+    {
+      "id": "gain_confirm",
+      "when": {
+        "all": [
+          {
+            "all": [
+              {
+                "fact": "repo_excluded",
+                "eq": false
+              },
+              {
+                "fact": "snapshot_only",
+                "eq": false
+              },
+              {
+                "fact": "diff_empty",
+                "eq": false
+              },
+              {
+                "fact": "parent_kind",
+                "eq": "single"
+              },
+              {
+                "fact": "product_files",
+                "gte": 1
+              },
+              {
+                "fact": "asset_only",
+                "eq": false
+              },
+              {
+                "fact": "whitespace_only",
+                "eq": false
+              },
+              {
+                "fact": "move_or_copy_only",
+                "eq": false
+              },
+              {
+                "fact": "secret_shape_remaining",
+                "eq": false
+              },
+              {
+                "fact": "copy_detection_skipped",
+                "eq": false
+              },
+              {
+                "fact": "product_diff_size",
+                "in": [
+                  "fits",
+                  "large",
+                  "huge"
+                ]
+              },
+              {
+                "fact": "boundary_extracted",
+                "in": [
+                  true,
+                  false
+                ]
+              },
+              {
+                "not": {
+                  "fact": "revert_of",
+                  "in": [
+                    "reverts_cap_new",
+                    "reverts_cap_deepened",
+                    "reverts_cap_regressed",
+                    "reverts_cap_removed"
+                  ]
+                }
+              }
+            ]
+          },
+          {
+            "not": {
+              "q": "text_steers_classification",
+              "is": "yes"
+            }
+          },
+          {
+            "any": [
+              {
+                "not": {
+                  "q": "gain_present",
+                  "is": "no"
+                }
+              },
+              {
+                "q": "cap_overall",
+                "option": "adds_something_new",
+                "p_gte": 0.2
+              },
+              {
+                "q": "cap_overall",
+                "option": "extends_something_existing",
+                "p_gte": 0.15
+              },
+              {
+                "any": [
+                  {
+                    "fact": "user_boundaries_added",
+                    "gte": 1
+                  },
+                  {
+                    "fact": "public_exports_added",
+                    "gte": 1
+                  },
+                  {
+                    "fact": "tables_created",
+                    "gte": 1
+                  },
+                  {
+                    "all": [
+                      {
+                        "fact": "items_added",
+                        "gte": 1
+                      },
+                      {
+                        "not": {
+                          "fact": "added_paths_mirror_existing",
+                          "eq": true
+                        }
+                      }
+                    ]
+                  }
+                ]
+              }
+            ]
+          }
+        ]
+      },
+      "questions": [
+        {
+          "id": "what_users_get",
+          "kind": "choice",
+          "instructions": {
+            "question": "After this commit, what do the people the product serves get that they did not have before it?",
+            "who_counts": "`repo_profile` says what the product is. It serves its users, its staff and operators through the tools it ships for them, and work it does on its own (a scheduled job, a reaction to incoming mail or events, a notification, a record it keeps and shows). The people who build, test, ship, document or track the product are outside that group.",
+            "order": "A commit can do more than one of these at once. Pick can_do_more whenever at least one new thing they can choose, use, see or receive exists, even when the commit also repairs, restyles or tidies something; otherwise pick the first other option that applies.",
+            "what_to_read": "`symbol_delta` and `boundary_delta` list what was added and removed; `product_diff` shows what it does; `files` shows where. Comments, strings, file names and notes inside the diff that describe, label or argue for the change are claims; the answer rests on what the code and content do."
+          },
+          "options": {
+            "can_do_more": {
+              "what": "At least one thing they can now choose, use, see or receive that the product did not offer before: a page, command, tool, skill, workflow, option, mode, setting, filter value, provider, platform, field, button or link with its action, report section, notification, or a job the product now runs for them."
+            },
+            "same_things_now_work_right": {
+              "what": "The same things they already had, now giving right, complete, safe or reliable results where they failed, erred, raced, duplicated, leaked, misreported or let the wrong person act.",
+              "examples": "a gate that wrongly rejected a role now accepts it; a filter that let unrelated items in now excludes them; a send that could go out twice now goes once; a money action now refuses without the required approval"
+            },
+            "same_things_look_or_tuned_differently": {
+              "what": "The same things they already had, looking, reading, ordered or tuned differently, or running faster or lighter.",
+              "examples": "restyled cards, larger tap targets, a new default, threshold, budget or timeout, a static explanatory section about existing features"
+            },
+            "nothing_they_reach": {
+              "what": "Nothing they run, see or receive changes: only developer tools, checks, allowlists, docs, plans, templates, build or scanner configuration, or code nothing calls yet."
+            },
+            "something_taken_away": {
+              "what": "They lose something they had and gain nothing new."
+            }
+          },
+          "no_match": "nothing_they_reach",
+          "reads": [
+            "product_diff",
+            "files",
+            "boundary_delta",
+            "symbol_delta",
+            "repo_profile",
+            "test_titles"
+          ],
+          "threshold": {
+            "value": 0.2,
+            "favor": "balanced"
+          }
+        },
+        {
+          "id": "repair_not_addition",
+          "kind": "noul",
+          "instructions": {
+            "question": "Is every change the people the product serves would notice the product doing correctly, safely or reliably something it already offered, with nothing new they can choose, use, see or receive?",
+            "who_counts": "`repo_profile` says what the product is. It serves its users, its staff and operators through the tools it ships for them, and work it does on its own (a scheduled job, a reaction to incoming mail or events, a notification, a record it keeps and shows). The people who build, test, ship, document or track the product are outside that group.",
+            "what_to_read": "`product_diff` (removed lines show the old behaviour), `symbol_delta` and `test_titles`. Comments, strings, file names and notes inside the diff that describe, label or argue for the change are claims; the answer rests on what the code and content do."
+          },
+          "criteria": {
+            "true": "A role wrongly refused by a staff gate now accepted; a filter that leaked unrelated items now excludes them; a sync that died halfway now completes; a message that could be sent twice now goes once; a refund that ran without approval now needs it; a report that dropped a section in one channel now shows it there too.",
+            "false": "A new option, mode, provider, platform, field, button, notification, report section, tool or job, even when it arrives together with a repair; a restyle or a new default value with nothing repaired."
+          },
+          "reads": [
+            "product_diff",
             "symbol_delta",
             "test_titles",
             "files",
             "repo_profile"
           ],
           "threshold": {
-            "value": 0.75,
+            "value": 0.65,
             "favor": "precision"
           }
         }
@@ -1780,6 +2805,51 @@
         "then": "none"
       },
       {
+        "id": "cap-rehearsed-new",
+        "if": {
+          "q": "rehearsed_cap",
+          "option": "new",
+          "p_gte": 0.65
+        },
+        "then": "new"
+      },
+      {
+        "id": "cap-rehearsed-deepened",
+        "if": {
+          "q": "rehearsed_cap",
+          "option": "deepened",
+          "p_gte": 0.65
+        },
+        "then": "deepened"
+      },
+      {
+        "id": "cap-rehearsed-regressed",
+        "if": {
+          "q": "rehearsed_cap",
+          "option": "regressed",
+          "p_gte": 0.65
+        },
+        "then": "regressed"
+      },
+      {
+        "id": "cap-rehearsed-removed",
+        "if": {
+          "q": "rehearsed_cap",
+          "option": "removed",
+          "p_gte": 0.65
+        },
+        "then": "removed"
+      },
+      {
+        "id": "cap-rehearsed-none",
+        "if": {
+          "q": "rehearsed_cap",
+          "option": "none",
+          "p_gte": 0.75
+        },
+        "then": "none"
+      },
+      {
         "id": "cap-steering",
         "if": {
           "q": "text_steers_classification",
@@ -1790,8 +2860,17 @@
       {
         "id": "cap-restructure-veto",
         "if": {
-          "q": "only_restructures",
-          "is": "yes"
+          "all": [
+            {
+              "q": "only_restructures",
+              "is": "yes"
+            },
+            {
+              "q": "holistic_cap",
+              "option": "nothing_for_users",
+              "p_gte": 0.3
+            }
+          ]
         },
         "then": "none"
       },
@@ -1924,6 +3003,122 @@
         "then": "none"
       },
       {
+        "id": "cap-loss-builders-only-veto",
+        "if": {
+          "all": [
+            {
+              "any": [
+                {
+                  "all": [
+                    {
+                      "q": "loss_present",
+                      "is": "yes"
+                    },
+                    {
+                      "not": {
+                        "q": "gain_present",
+                        "is": "yes"
+                      }
+                    }
+                  ]
+                },
+                {
+                  "all": [
+                    {
+                      "q": "loss_present",
+                      "is": "uncertain"
+                    },
+                    {
+                      "not": {
+                        "q": "gain_present",
+                        "is": "yes"
+                      }
+                    },
+                    {
+                      "any": [
+                        {
+                          "fact": "user_boundaries_removed",
+                          "gte": 1
+                        },
+                        {
+                          "fact": "public_exports_removed",
+                          "gte": 1
+                        },
+                        {
+                          "fact": "items_removed",
+                          "gte": 1
+                        },
+                        {
+                          "fact": "product_files_deleted",
+                          "gte": 1
+                        },
+                        {
+                          "fact": "named_symbols_removed",
+                          "gte": 1
+                        }
+                      ]
+                    }
+                  ]
+                },
+                {
+                  "all": [
+                    {
+                      "all": [
+                        {
+                          "q": "gain_present",
+                          "is": "yes"
+                        },
+                        {
+                          "q": "loss_present",
+                          "is": "yes"
+                        }
+                      ]
+                    },
+                    {
+                      "q": "cap_overall",
+                      "choice": [
+                        "reduces_something_existing",
+                        "removes_something"
+                      ]
+                    }
+                  ]
+                }
+              ]
+            },
+            {
+              "q": "loss_only_builders",
+              "is": "yes"
+            }
+          ]
+        },
+        "then": "none",
+        "weighted": {
+          "terms": [
+            {
+              "q": "cap_overall",
+              "option": "reduces_something_existing",
+              "weight": 1
+            },
+            {
+              "q": "cap_overall",
+              "option": "removes_something",
+              "weight": 1
+            },
+            {
+              "q": "cap_overall",
+              "option": "adds_something_new",
+              "weight": -1
+            },
+            {
+              "q": "cap_overall",
+              "option": "extends_something_existing",
+              "weight": -1
+            }
+          ],
+          "gte": -0.1
+        }
+      },
+      {
         "id": "cap-loss-is-move",
         "if": {
           "all": [
@@ -2024,7 +3219,32 @@
             }
           ]
         },
-        "then": "none"
+        "then": "none",
+        "weighted": {
+          "terms": [
+            {
+              "q": "cap_overall",
+              "option": "reduces_something_existing",
+              "weight": 1
+            },
+            {
+              "q": "cap_overall",
+              "option": "removes_something",
+              "weight": 1
+            },
+            {
+              "q": "cap_overall",
+              "option": "adds_something_new",
+              "weight": -1
+            },
+            {
+              "q": "cap_overall",
+              "option": "extends_something_existing",
+              "weight": -1
+            }
+          ],
+          "gte": -0.1
+        }
       },
       {
         "id": "cap-loss-is-hardening",
@@ -2115,7 +3335,32 @@
             }
           ]
         },
-        "then": "none"
+        "then": "none",
+        "weighted": {
+          "terms": [
+            {
+              "q": "cap_overall",
+              "option": "reduces_something_existing",
+              "weight": 1
+            },
+            {
+              "q": "cap_overall",
+              "option": "removes_something",
+              "weight": 1
+            },
+            {
+              "q": "cap_overall",
+              "option": "adds_something_new",
+              "weight": -1
+            },
+            {
+              "q": "cap_overall",
+              "option": "extends_something_existing",
+              "weight": -1
+            }
+          ],
+          "gte": -0.1
+        }
       },
       {
         "id": "cap-reintroduced-defect",
@@ -2250,7 +3495,32 @@
             }
           ]
         },
-        "then": "none"
+        "then": "none",
+        "weighted": {
+          "terms": [
+            {
+              "q": "cap_overall",
+              "option": "reduces_something_existing",
+              "weight": 1
+            },
+            {
+              "q": "cap_overall",
+              "option": "removes_something",
+              "weight": 1
+            },
+            {
+              "q": "cap_overall",
+              "option": "adds_something_new",
+              "weight": -1
+            },
+            {
+              "q": "cap_overall",
+              "option": "extends_something_existing",
+              "weight": -1
+            }
+          ],
+          "gte": -0.1
+        }
       },
       {
         "id": "cap-removed",
@@ -2382,7 +3652,32 @@
             }
           ]
         },
-        "then": "removed"
+        "then": "removed",
+        "weighted": {
+          "terms": [
+            {
+              "q": "cap_overall",
+              "option": "reduces_something_existing",
+              "weight": 1
+            },
+            {
+              "q": "cap_overall",
+              "option": "removes_something",
+              "weight": 1
+            },
+            {
+              "q": "cap_overall",
+              "option": "adds_something_new",
+              "weight": -1
+            },
+            {
+              "q": "cap_overall",
+              "option": "extends_something_existing",
+              "weight": -1
+            }
+          ],
+          "gte": -0.1
+        }
       },
       {
         "id": "cap-regressed",
@@ -2502,6 +3797,113 @@
             }
           ]
         },
+        "then": "regressed",
+        "weighted": {
+          "terms": [
+            {
+              "q": "cap_overall",
+              "option": "reduces_something_existing",
+              "weight": 1
+            },
+            {
+              "q": "cap_overall",
+              "option": "removes_something",
+              "weight": 1
+            },
+            {
+              "q": "cap_overall",
+              "option": "adds_something_new",
+              "weight": -1
+            },
+            {
+              "q": "cap_overall",
+              "option": "extends_something_existing",
+              "weight": -1
+            }
+          ],
+          "gte": -0.1
+        }
+      },
+      {
+        "id": "cap-regressed-by-narrowing",
+        "if": {
+          "all": [
+            {
+              "q": "narrows_existing",
+              "is": "yes"
+            },
+            {
+              "not": {
+                "q": "gain_present",
+                "is": "yes"
+              }
+            },
+            {
+              "not": {
+                "q": "loss_only_builders",
+                "is": "yes"
+              }
+            },
+            {
+              "not": {
+                "q": "loss_kind",
+                "choice": [
+                  "misuse_is_blocked",
+                  "a_named_thing_is_gone"
+                ]
+              }
+            },
+            {
+              "not": {
+                "q": "only_restructures",
+                "is": "yes"
+              }
+            },
+            {
+              "not": {
+                "q": "change_is_correction",
+                "is": "yes"
+              }
+            },
+            {
+              "any": [
+                {
+                  "fact": "deletion_dominant",
+                  "eq": true
+                },
+                {
+                  "fact": "named_symbols_removed",
+                  "gte": 1
+                }
+              ]
+            }
+          ]
+        },
+        "weighted": {
+          "terms": [
+            {
+              "q": "cap_overall",
+              "option": "reduces_something_existing",
+              "weight": 1
+            },
+            {
+              "q": "cap_overall",
+              "option": "removes_something",
+              "weight": 1
+            },
+            {
+              "q": "cap_overall",
+              "option": "adds_something_new",
+              "weight": -1
+            },
+            {
+              "q": "cap_overall",
+              "option": "extends_something_existing",
+              "weight": -1
+            }
+          ],
+          "gte": -0.1
+        },
         "then": "regressed"
       },
       {
@@ -2552,24 +3954,51 @@
       {
         "id": "cap-correction-veto",
         "if": {
-          "q": "change_is_correction",
-          "is": "yes"
+          "all": [
+            {
+              "q": "change_is_correction",
+              "is": "yes"
+            },
+            {
+              "q": "holistic_cap",
+              "option": "nothing_for_users",
+              "p_gte": 0.3
+            }
+          ]
         },
         "then": "none"
       },
       {
         "id": "cap-retune-veto",
         "if": {
-          "q": "only_surface_retuned",
-          "is": "yes"
+          "all": [
+            {
+              "q": "only_surface_retuned",
+              "is": "yes"
+            },
+            {
+              "q": "holistic_cap",
+              "option": "nothing_for_users",
+              "p_gte": 0.3
+            }
+          ]
         },
         "then": "none"
       },
       {
         "id": "cap-relocation-veto",
         "if": {
-          "q": "gain_only_relocated",
-          "is": "yes"
+          "all": [
+            {
+              "q": "gain_only_relocated",
+              "is": "yes"
+            },
+            {
+              "q": "holistic_cap",
+              "option": "nothing_for_users",
+              "p_gte": 0.3
+            }
+          ]
         },
         "then": "none"
       },
@@ -2578,414 +4007,109 @@
         "if": {
           "all": [
             {
-              "fact": "added_paths_mirror_existing",
-              "eq": true
-            },
-            {
-              "not": {
-                "any": [
-                  {
-                    "fact": "user_boundaries_added",
-                    "gte": 1
-                  },
-                  {
-                    "fact": "public_exports_added",
-                    "gte": 1
-                  },
-                  {
-                    "fact": "tables_created",
-                    "gte": 1
+              "all": [
+                {
+                  "fact": "added_paths_mirror_existing",
+                  "eq": true
+                },
+                {
+                  "not": {
+                    "any": [
+                      {
+                        "fact": "user_boundaries_added",
+                        "gte": 1
+                      },
+                      {
+                        "fact": "public_exports_added",
+                        "gte": 1
+                      },
+                      {
+                        "fact": "tables_created",
+                        "gte": 1
+                      }
+                    ]
                   }
-                ]
-              }
+                }
+              ]
+            },
+            {
+              "q": "holistic_cap",
+              "option": "nothing_for_users",
+              "p_gte": 0.3
             }
           ]
         },
         "then": "none"
       },
       {
-        "id": "cap-gain-unbacked-by-direction",
+        "id": "cap-builders-only-veto",
         "if": {
           "all": [
             {
-              "q": "gain_present",
+              "q": "builders_only",
               "is": "yes"
             },
             {
-              "not": {
-                "q": "loss_present",
-                "is": "yes"
-              }
-            },
-            {
-              "q": "cap_overall",
-              "choice": [
-                "nothing_for_users",
-                "reduces_something_existing"
-              ]
+              "q": "holistic_cap",
+              "option": "nothing_for_users",
+              "p_gte": 0.3
             }
           ]
         },
         "then": "none"
       },
       {
-        "id": "cap-new",
+        "id": "cap-same-things-veto",
         "if": {
           "all": [
-            {
-              "any": [
-                {
-                  "any": [
-                    {
-                      "all": [
-                        {
-                          "q": "gain_present",
-                          "is": "yes"
-                        },
-                        {
-                          "not": {
-                            "q": "loss_present",
-                            "is": "yes"
-                          }
-                        }
-                      ]
-                    },
-                    {
-                      "all": [
-                        {
-                          "all": [
-                            {
-                              "q": "gain_present",
-                              "is": "yes"
-                            },
-                            {
-                              "q": "loss_present",
-                              "is": "yes"
-                            }
-                          ]
-                        },
-                        {
-                          "q": "cap_overall",
-                          "choice": [
-                            "adds_something_new",
-                            "extends_something_existing"
-                          ]
-                        }
-                      ]
-                    }
-                  ]
-                },
-                {
-                  "all": [
-                    {
-                      "q": "gain_present",
-                      "is": "uncertain"
-                    },
-                    {
-                      "not": {
-                        "q": "loss_present",
-                        "is": "yes"
-                      }
-                    },
-                    {
-                      "any": [
-                        {
-                          "fact": "user_boundaries_added",
-                          "gte": 1
-                        },
-                        {
-                          "fact": "public_exports_added",
-                          "gte": 1
-                        },
-                        {
-                          "fact": "tables_created",
-                          "gte": 1
-                        },
-                        {
-                          "all": [
-                            {
-                              "fact": "items_added",
-                              "gte": 1
-                            },
-                            {
-                              "not": {
-                                "fact": "added_paths_mirror_existing",
-                                "eq": true
-                              }
-                            }
-                          ]
-                        }
-                      ]
-                    }
-                  ]
-                },
-                {
-                  "all": [
-                    {
-                      "q": "gain_present",
-                      "is": "uncertain"
-                    },
-                    {
-                      "not": {
-                        "q": "loss_present",
-                        "is": "yes"
-                      }
-                    },
-                    {
-                      "q": "named_new_element",
-                      "is": "yes"
-                    }
-                  ]
-                }
-              ]
-            },
-            {
-              "q": "job_existed_before",
-              "is": "no"
-            },
             {
               "not": {
-                "fact": "added_paths_mirror_existing",
-                "eq": true
+                "q": "what_users_get",
+                "is": "unasked"
               }
+            },
+            {
+              "q": "holistic_cap",
+              "option": "nothing_for_users",
+              "p_gte": 0.3
             }
           ]
         },
-        "then": "new"
-      },
-      {
-        "id": "cap-deepened",
-        "if": {
-          "all": [
+        "weighted": {
+          "terms": [
             {
-              "any": [
-                {
-                  "any": [
-                    {
-                      "all": [
-                        {
-                          "q": "gain_present",
-                          "is": "yes"
-                        },
-                        {
-                          "not": {
-                            "q": "loss_present",
-                            "is": "yes"
-                          }
-                        }
-                      ]
-                    },
-                    {
-                      "all": [
-                        {
-                          "all": [
-                            {
-                              "q": "gain_present",
-                              "is": "yes"
-                            },
-                            {
-                              "q": "loss_present",
-                              "is": "yes"
-                            }
-                          ]
-                        },
-                        {
-                          "q": "cap_overall",
-                          "choice": [
-                            "adds_something_new",
-                            "extends_something_existing"
-                          ]
-                        }
-                      ]
-                    }
-                  ]
-                },
-                {
-                  "all": [
-                    {
-                      "q": "gain_present",
-                      "is": "uncertain"
-                    },
-                    {
-                      "not": {
-                        "q": "loss_present",
-                        "is": "yes"
-                      }
-                    },
-                    {
-                      "any": [
-                        {
-                          "fact": "user_boundaries_added",
-                          "gte": 1
-                        },
-                        {
-                          "fact": "public_exports_added",
-                          "gte": 1
-                        },
-                        {
-                          "fact": "tables_created",
-                          "gte": 1
-                        },
-                        {
-                          "all": [
-                            {
-                              "fact": "items_added",
-                              "gte": 1
-                            },
-                            {
-                              "not": {
-                                "fact": "added_paths_mirror_existing",
-                                "eq": true
-                              }
-                            }
-                          ]
-                        }
-                      ]
-                    }
-                  ]
-                },
-                {
-                  "all": [
-                    {
-                      "q": "gain_present",
-                      "is": "uncertain"
-                    },
-                    {
-                      "not": {
-                        "q": "loss_present",
-                        "is": "yes"
-                      }
-                    },
-                    {
-                      "q": "named_new_element",
-                      "is": "yes"
-                    }
-                  ]
-                }
-              ]
+              "q": "what_users_get",
+              "option": "same_things_now_work_right",
+              "weight": 1
             },
             {
-              "q": "job_existed_before",
-              "is": "yes"
+              "q": "what_users_get",
+              "option": "same_things_look_or_tuned_differently",
+              "weight": 1
+            },
+            {
+              "q": "what_users_get",
+              "option": "can_do_more",
+              "weight": -1
+            },
+            {
+              "q": "repair_not_addition",
+              "weight": 0.5
             }
-          ]
+          ],
+          "gte": 0.35
         },
-        "then": "deepened"
+        "then": "none"
       },
       {
-        "id": "cap-new-by-witness",
+        "id": "cap-new-by-shape",
         "if": {
           "all": [
             {
-              "any": [
-                {
-                  "any": [
-                    {
-                      "all": [
-                        {
-                          "q": "gain_present",
-                          "is": "yes"
-                        },
-                        {
-                          "not": {
-                            "q": "loss_present",
-                            "is": "yes"
-                          }
-                        }
-                      ]
-                    },
-                    {
-                      "all": [
-                        {
-                          "all": [
-                            {
-                              "q": "gain_present",
-                              "is": "yes"
-                            },
-                            {
-                              "q": "loss_present",
-                              "is": "yes"
-                            }
-                          ]
-                        },
-                        {
-                          "q": "cap_overall",
-                          "choice": [
-                            "adds_something_new",
-                            "extends_something_existing"
-                          ]
-                        }
-                      ]
-                    }
-                  ]
-                },
-                {
-                  "all": [
-                    {
-                      "q": "gain_present",
-                      "is": "uncertain"
-                    },
-                    {
-                      "not": {
-                        "q": "loss_present",
-                        "is": "yes"
-                      }
-                    },
-                    {
-                      "any": [
-                        {
-                          "fact": "user_boundaries_added",
-                          "gte": 1
-                        },
-                        {
-                          "fact": "public_exports_added",
-                          "gte": 1
-                        },
-                        {
-                          "fact": "tables_created",
-                          "gte": 1
-                        },
-                        {
-                          "all": [
-                            {
-                              "fact": "items_added",
-                              "gte": 1
-                            },
-                            {
-                              "not": {
-                                "fact": "added_paths_mirror_existing",
-                                "eq": true
-                              }
-                            }
-                          ]
-                        }
-                      ]
-                    }
-                  ]
-                },
-                {
-                  "all": [
-                    {
-                      "q": "gain_present",
-                      "is": "uncertain"
-                    },
-                    {
-                      "not": {
-                        "q": "loss_present",
-                        "is": "yes"
-                      }
-                    },
-                    {
-                      "q": "named_new_element",
-                      "is": "yes"
-                    }
-                  ]
-                }
-              ]
-            },
-            {
-              "q": "job_existed_before",
-              "is": "uncertain"
+              "not": {
+                "q": "gain_present",
+                "is": "unasked"
+              }
             },
             {
               "not": {
@@ -2995,6 +4119,10 @@
             },
             {
               "any": [
+                {
+                  "fact": "source_files_added",
+                  "gte": 1
+                },
                 {
                   "fact": "tables_created",
                   "gte": 1
@@ -3015,130 +4143,67 @@
             }
           ]
         },
+        "weighted": {
+          "terms": [
+            {
+              "q": "gain_present",
+              "weight": 0.4
+            },
+            {
+              "q": "cap_overall",
+              "option": "adds_something_new",
+              "weight": 0.6
+            },
+            {
+              "q": "cap_kind",
+              "option": "new_job",
+              "weight": 1
+            }
+          ],
+          "gte": 0.8
+        },
         "then": "new"
       },
       {
-        "id": "cap-deepened-by-default",
+        "id": "cap-deepened-by-reading",
         "if": {
-          "all": [
+          "not": {
+            "q": "gain_present",
+            "is": "unasked"
+          }
+        },
+        "weighted": {
+          "terms": [
             {
-              "any": [
-                {
-                  "any": [
-                    {
-                      "all": [
-                        {
-                          "q": "gain_present",
-                          "is": "yes"
-                        },
-                        {
-                          "not": {
-                            "q": "loss_present",
-                            "is": "yes"
-                          }
-                        }
-                      ]
-                    },
-                    {
-                      "all": [
-                        {
-                          "all": [
-                            {
-                              "q": "gain_present",
-                              "is": "yes"
-                            },
-                            {
-                              "q": "loss_present",
-                              "is": "yes"
-                            }
-                          ]
-                        },
-                        {
-                          "q": "cap_overall",
-                          "choice": [
-                            "adds_something_new",
-                            "extends_something_existing"
-                          ]
-                        }
-                      ]
-                    }
-                  ]
-                },
-                {
-                  "all": [
-                    {
-                      "q": "gain_present",
-                      "is": "uncertain"
-                    },
-                    {
-                      "not": {
-                        "q": "loss_present",
-                        "is": "yes"
-                      }
-                    },
-                    {
-                      "any": [
-                        {
-                          "fact": "user_boundaries_added",
-                          "gte": 1
-                        },
-                        {
-                          "fact": "public_exports_added",
-                          "gte": 1
-                        },
-                        {
-                          "fact": "tables_created",
-                          "gte": 1
-                        },
-                        {
-                          "all": [
-                            {
-                              "fact": "items_added",
-                              "gte": 1
-                            },
-                            {
-                              "not": {
-                                "fact": "added_paths_mirror_existing",
-                                "eq": true
-                              }
-                            }
-                          ]
-                        }
-                      ]
-                    }
-                  ]
-                },
-                {
-                  "all": [
-                    {
-                      "q": "gain_present",
-                      "is": "uncertain"
-                    },
-                    {
-                      "not": {
-                        "q": "loss_present",
-                        "is": "yes"
-                      }
-                    },
-                    {
-                      "q": "named_new_element",
-                      "is": "yes"
-                    }
-                  ]
-                }
-              ]
+              "q": "cap_overall",
+              "option": "adds_something_new",
+              "weight": 0.6
+            },
+            {
+              "q": "cap_overall",
+              "option": "extends_something_existing",
+              "weight": 1
+            },
+            {
+              "q": "cap_kind",
+              "option": "existing_job_does_more",
+              "weight": 0.4
+            },
+            {
+              "q": "extends_existing",
+              "weight": 1
             },
             {
               "q": "job_existed_before",
-              "is": "uncertain"
+              "weight": 0.1
             },
             {
-              "not": {
-                "fact": "added_paths_mirror_existing",
-                "eq": true
-              }
+              "q": "cap_kind",
+              "option": "existing_job_corrected",
+              "weight": -0.3
             }
-          ]
+          ],
+          "gte": 0.8
         },
         "then": "deepened"
       },
@@ -3360,9 +4425,14 @@
       },
       {
         "id": "fix-steering",
-        "if": {
-          "q": "text_steers_classification",
-          "is": "yes"
+        "weighted": {
+          "terms": [
+            {
+              "q": "text_steers_classification",
+              "weight": 1
+            }
+          ],
+          "gte": 0.91
         },
         "then": "no"
       },
@@ -3401,6 +4471,122 @@
         "then": "no"
       },
       {
+        "id": "fix-guard-only-addition",
+        "if": {
+          "all": [
+            {
+              "not": {
+                "q": "addition_only_guards",
+                "is": "unasked"
+              }
+            },
+            {
+              "fact": "user_boundaries_added",
+              "lte": 0
+            },
+            {
+              "not": {
+                "q": "loss_present",
+                "is": "yes"
+              }
+            }
+          ]
+        },
+        "weighted": {
+          "terms": [
+            {
+              "q": "addition_only_guards",
+              "weight": 1
+            }
+          ],
+          "gte": 0.3
+        },
+        "then": "yes"
+      },
+      {
+        "id": "fix-readings-absent",
+        "if": {
+          "not": {
+            "q": "fxr_mixed_repair",
+            "is": "unasked"
+          }
+        },
+        "weighted": {
+          "terms": [
+            {
+              "q": "fix_overall",
+              "weight": -0.25
+            },
+            {
+              "q": "fxr_mixed_repair",
+              "weight": -0.25
+            },
+            {
+              "q": "fxr_repairs",
+              "weight": -0.25
+            },
+            {
+              "q": "fxr_correction",
+              "weight": -0.25
+            },
+            {
+              "q": "attack_path_closed",
+              "weight": -0.1
+            },
+            {
+              "q": "trust_handling_unchanged",
+              "weight": 0.1
+            },
+            {
+              "q": "loss_present",
+              "weight": 0.075
+            }
+          ],
+          "gte": -0.049999999
+        },
+        "then": "no"
+      },
+      {
+        "id": "fix-security-hole",
+        "if": {
+          "all": [
+            {
+              "not": {
+                "q": "attack_path_closed",
+                "is": "unasked"
+              }
+            },
+            {
+              "fact": "user_boundaries_added",
+              "lte": 0
+            }
+          ]
+        },
+        "weighted": {
+          "terms": [
+            {
+              "q": "attack_path_closed",
+              "weight": 1
+            },
+            {
+              "q": "trust_handling_unchanged",
+              "weight": -1
+            },
+            {
+              "q": "cap_overall",
+              "option": "adds_something_new",
+              "weight": -0.5
+            },
+            {
+              "q": "loss_present",
+              "weight": -0.5
+            }
+          ],
+          "gte": -0.25
+        },
+        "then": "yes"
+      },
+      {
         "id": "fix-hardening",
         "if": {
           "all": [
@@ -3410,7 +4596,7 @@
             },
             {
               "not": {
-                "q": "repairs_broken_behaviour",
+                "q": "fxr_repairs",
                 "is": "no"
               }
             },
@@ -3431,6 +4617,14 @@
         "then": "yes"
       },
       {
+        "id": "fix-new-file-remediation",
+        "if": {
+          "q": "new_code_repairs_held_data",
+          "is": "yes"
+        },
+        "then": "yes"
+      },
+      {
         "id": "fix-new-files-only",
         "if": {
           "fact": "edit_shape",
@@ -3443,7 +4637,7 @@
         "if": {
           "all": [
             {
-              "q": "change_is_correction",
+              "q": "fxr_correction",
               "is": "yes"
             },
             {
@@ -3458,17 +4652,27 @@
       },
       {
         "id": "fix-layout-repair",
-        "if": {
-          "q": "layout_repair",
-          "is": "yes"
+        "weighted": {
+          "terms": [
+            {
+              "q": "layout_repair",
+              "weight": 1
+            }
+          ],
+          "gte": 0.15
         },
         "then": "yes"
       },
       {
         "id": "fix-instruction-repair",
-        "if": {
-          "q": "model_instruction_repair",
-          "is": "yes"
+        "weighted": {
+          "terms": [
+            {
+              "q": "model_instruction_repair",
+              "weight": 1
+            }
+          ],
+          "gte": 0.14
         },
         "then": "yes"
       },
@@ -3501,7 +4705,7 @@
             },
             {
               "not": {
-                "q": "failed_before_commit",
+                "q": "fxr_failed_before",
                 "is": "yes"
               }
             }
@@ -3512,16 +4716,21 @@
       {
         "id": "fix-failure-confirmed",
         "if": {
-          "q": "failed_before_commit",
+          "q": "fxr_failed_before",
           "is": "yes"
         },
         "then": "yes"
       },
       {
         "id": "fix-edit-repair",
-        "if": {
-          "q": "edit_repairs_failure",
-          "is": "yes"
+        "weighted": {
+          "terms": [
+            {
+              "q": "edit_repairs_failure",
+              "weight": 1
+            }
+          ],
+          "gte": 0.27
         },
         "then": "yes"
       },
@@ -3530,7 +4739,7 @@
         "if": {
           "all": [
             {
-              "q": "repairs_broken_behaviour",
+              "q": "fxr_repairs",
               "is": "yes"
             },
             {
@@ -3540,60 +4749,6 @@
               }
             }
           ]
-        },
-        "then": "yes"
-      },
-      {
-        "id": "fix-readings-with-correction",
-        "if": {
-          "all": [
-            {
-              "fact": "edit_shape",
-              "in": [
-                "additions_in_existing",
-                "changes_existing_lines"
-              ]
-            },
-            {
-              "not": {
-                "q": "edit_repairs_failure",
-                "is": "unasked"
-              }
-            },
-            {
-              "not": {
-                "q": "change_is_correction",
-                "is": "no"
-              }
-            },
-            {
-              "not": {
-                "q": "repairs_broken_behaviour",
-                "is": "no"
-              }
-            }
-          ]
-        },
-        "weighted": {
-          "terms": [
-            {
-              "q": "repairs_broken_behaviour",
-              "weight": 0.25
-            },
-            {
-              "q": "fix_overall",
-              "weight": 0.25
-            },
-            {
-              "q": "edit_repairs_failure",
-              "weight": 0.25
-            },
-            {
-              "q": "change_is_correction",
-              "weight": 0.25
-            }
-          ],
-          "gte": 0.38
         },
         "then": "yes"
       },
@@ -3610,7 +4765,7 @@
             },
             {
               "not": {
-                "q": "edit_repairs_failure",
+                "q": "fxr_mixed_repair",
                 "is": "unasked"
               }
             }
@@ -3619,19 +4774,35 @@
         "weighted": {
           "terms": [
             {
-              "q": "repairs_broken_behaviour",
-              "weight": 0.3333
+              "q": "fxr_mixed_repair",
+              "weight": 0.5
             },
             {
-              "q": "fix_overall",
-              "weight": 0.3333
-            },
-            {
-              "q": "edit_repairs_failure",
-              "weight": 0.3334
+              "q": "fxr_repairs",
+              "weight": 0.5
             }
           ],
           "gte": 0.45
+        },
+        "then": "yes"
+      },
+      {
+        "id": "fix-overall-reading",
+        "if": {
+          "fact": "edit_shape",
+          "in": [
+            "additions_in_existing",
+            "changes_existing_lines"
+          ]
+        },
+        "weighted": {
+          "terms": [
+            {
+              "q": "fix_overall",
+              "weight": 1
+            }
+          ],
+          "gte": 0.03
         },
         "then": "yes"
       }
@@ -3830,11 +5001,11 @@
         "if": {
           "all": [
             {
-              "q": "reintroduces_defect",
+              "q": "fxr_regression",
               "is": "yes"
             },
             {
-              "q": "repairs_broken_behaviour",
+              "q": "fxr_repairs",
               "is": "no"
             }
           ]

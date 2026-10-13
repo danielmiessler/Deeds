@@ -176,7 +176,7 @@ footer a { color: var(--dim); }
 <main>
 <header>
   <div><div class="brand">Deeds report<span>${e(where)}</span></div><h1>${e(name)}</h1></div>
-  <div class="meta-line"><b>${day(r.window.first)} → ${day(r.window.last)}</b><br>${r.commits} commits read · judged by ${e(r.mode)} (${e(r.model.replace(/^typesafe:/, ""))})</div>
+  <div class="meta-line"><b>${day(r.window.first)} → ${day(r.window.last)}</b><br>${r.commits} commits read · judged by ${e(r.mode)} (${e(r.model.replace(/^cloudflare:/, ""))})</div>
 </header>
 ${warn}
 <div class="cards">${cards}</div>

@@ -2,7 +2,7 @@
  * Read-only git access for analyze: list the commits in a window and read each one's diff. Every call is
  * an argv array (no shell), and nothing here writes to the repository being analyzed.
  */
-import { existsSync, mkdirSync } from "node:fs";
+import { existsSync, mkdirSync, renameSync, rmSync } from "node:fs";
 import { join } from "node:path";
 import { CLONE_ROOT } from "./offline.ts";
 import { DeedsError, EXIT } from "./contract.ts";
@@ -72,14 +72,41 @@ export function cloneOrFetch(gh: { owner: string; repo: string; url: string }): 
       if (re.exitCode !== 0) throw new DeedsError("git_failed", `could not fetch the full history of ${gh.owner}/${gh.repo}: ${re.stderr.toString().trim()}`, EXIT.error);
     }
     const r = Bun.spawnSync(["git", "-C", dest, "fetch", "--quiet", "origin"], { stdout: "ignore", stderr: "pipe", env: CHECKOUT_ENV });
-    if (r.exitCode !== 0) throw new DeedsError("git_failed", `could not update ${gh.owner}/${gh.repo}: ${r.stderr.toString().trim()}`, EXIT.error);
-    Bun.spawnSync(["git", "-C", dest, "reset", "--quiet", "--hard", "origin/HEAD"], { stdout: "ignore", stderr: "ignore", env: CHECKOUT_ENV });
-    return dest;
+    // A failed fetch of a finished clone (no network, a bad remote) is an error and keeps the folder. A failed
+    // fetch of a folder with no origin/HEAD is a half-made clone, which is started over below.
+    if (r.exitCode !== 0 && hasOriginHead(dest)) throw new DeedsError("git_failed", `could not update ${gh.owner}/${gh.repo}: ${r.stderr.toString().trim()}`, EXIT.error);
+    const reset = r.exitCode === 0 ? Bun.spawnSync(["git", "-C", dest, "reset", "--quiet", "--hard", "origin/HEAD"], { stdout: "ignore", stderr: "ignore", env: CHECKOUT_ENV }) : r;
+    if (reset.exitCode === 0) return dest;
+    // A clone killed part way (power loss, OOM, a clone made before this check) has a .git but no origin/HEAD, and
+    // would fail every later run. Start it over.
+    rmSync(dest, { recursive: true, force: true });
   }
   mkdirSync(join(CLONE_ROOT, gh.owner), { recursive: true });
-  const r = Bun.spawnSync(["git", "clone", "--quiet", gh.url, dest], { stdout: "ignore", stderr: "pipe", env: CHECKOUT_ENV });
-  if (r.exitCode !== 0) throw new DeedsError("git_failed", `could not clone ${gh.owner}/${gh.repo}: ${r.stderr.toString().trim()}`, EXIT.error);
+  // Clone next to the destination and rename it into place, so `dest/.git` only ever exists for a finished clone
+  // and a concurrent run never takes a clone still in progress for a complete one.
+  const tmp = `${dest}.tmp-${process.pid}`;
+  rmSync(tmp, { recursive: true, force: true });
+  const r = Bun.spawnSync(["git", "clone", "--quiet", gh.url, tmp], { stdout: "ignore", stderr: "pipe", env: CHECKOUT_ENV });
+  if (r.exitCode !== 0) {
+    rmSync(tmp, { recursive: true, force: true });
+    throw new DeedsError("git_failed", `could not clone ${gh.owner}/${gh.repo}: ${r.stderr.toString().trim()}`, EXIT.error);
+  }
+  try {
+    renameSync(tmp, dest);
+  } catch (err) {
+    // Another run finished the same clone first: use theirs.
+    rmSync(tmp, { recursive: true, force: true });
+    if (!existsSync(join(dest, ".git"))) throw err;
+  }
+  if (!existsSync(join(dest, ".git"))) throw new InvariantViolation(`cloneOrFetch: ${dest} has no .git after a finished clone`);
   return dest;
+}
+
+class InvariantViolation extends Error {}
+
+/** True when the clone at `dir` has its origin/HEAD, which git sets last: the clone ran to the end. */
+function hasOriginHead(dir: string): boolean {
+  return Bun.spawnSync(["git", "-C", dir, "rev-parse", "--verify", "--quiet", "refs/remotes/origin/HEAD"], { stdout: "ignore", stderr: "ignore" }).exitCode === 0;
 }
 
 /**

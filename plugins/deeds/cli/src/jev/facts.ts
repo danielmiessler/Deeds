@@ -89,6 +89,12 @@ const REDACTION_EXTRA_SHAPES: readonly RegExp[] = [
  */
 export const SECRET_ASSIGNMENT =
   /(\b(?=[A-Za-z0-9_]*?(?:KEY|TOKEN|SECRET|PASSWORD|PASSWD|CREDENTIAL))(?=([A-Za-z0-9_]+))\2(?:\\?["'])?\s*[=:]\s*(?:\\?["'])?)[A-Za-z0-9._/+~-]{12,}/gi;
+/**
+ * A bare key with no vendor prefix: 32+ letters and digits mixing upper case, lower case and digits (the
+ * workshop projector's rule, added there 2026-10-11). Redacted but not counted by `hasSecretShape`, so the
+ * transport refusal does not change. Hex hashes lack upper case and are left alone.
+ */
+export const BARE_RUN_SHAPE = /\b(?=[A-Za-z0-9]*[A-Z])(?=[A-Za-z0-9]*[a-z])(?=[A-Za-z0-9]*\d)[A-Za-z0-9]{32,}\b/g;
 const REDACTION_MARK = "[REDACTED]";
 const ALL_VALUE_SHAPES: readonly RegExp[] = [...SECRET_VALUE_SHAPES, ...REDACTION_EXTRA_SHAPES].map((r) => new RegExp(r.source, r.flags.includes("g") ? r.flags : `${r.flags}g`));
 
@@ -100,6 +106,7 @@ export function redactSecretValues(text: string): string {
   let out = redactSecrets(text.replace(SECRET_ASSIGNMENT, (_m, name: string) => name + REDACTION_MARK)).text;
   for (const re of KEY_ARMOR_BLOCKS) out = out.replace(re, REDACTION_MARK);
   for (const re of ALL_VALUE_SHAPES) out = out.replace(re, REDACTION_MARK);
+  out = out.replace(BARE_RUN_SHAPE, REDACTION_MARK);
   return out.replace(SECRET_ASSIGNMENT, (_m, name: string) => name + REDACTION_MARK);
 }
 /**
@@ -1165,6 +1172,20 @@ const trimmedLineCount = (v: FileView): number => {
   return (v.git === "A" || v.git === "D") && n > 60 ? 51 : n;
 };
 
+/**
+ * A test call and its quoted title: `it("...")`, `test.only('...')`, `describe(`...`)`. The title is group 2.
+ *
+ * The first body alternative reads the string the usual way: `\x` is one escape, any other character but the
+ * quote is itself, and the first unescaped quote closes it. Only the escape branch may take a backslash, so
+ * each character has one reading and the scan stays linear. When no unescaped quote closes the string, the
+ * second alternative takes the title up to the line's last quote. That is what the 0.4.0 body
+ * `(?:\\.|(?!\1).)*` returned in that case after trying every way to split a run of backslashes, which took
+ * quadratic time or worse in the run's length. Both alternatives stop at line terminators, as `.` did.
+ * (Community PR #6, David André.)
+ */
+export const TEST_TITLE_CALL =
+  /\b(?:it|test|describe)(?:\.(?:only|skip|each|todo|concurrent))?\s*\(\s*(["'`])((?:\\.|(?!\1)[^\\\n\r\u2028\u2029])*|.*)\1/g;
+
 /** Test-case names from added lines in live test-class files, deduplicated and redacted; null when no test file changed. */
 function testTitles(views: FileView[]): string | null {
   const tests = views.filter((v) => v.cls === "test");
@@ -1174,7 +1195,7 @@ function testTitles(views: FileView[]): string | null {
     if (!v.section) continue;
     const lines = addedLines(v.section);
     lines.forEach((l, i) => {
-      for (const m of l.matchAll(/\b(?:it|test|describe)(?:\.(?:only|skip|each|todo|concurrent))?\s*\(\s*(["'`])((?:\\.|(?!\1).)*)\1/g)) titles.push(m[2]!);
+      for (const m of l.matchAll(TEST_TITLE_CALL)) titles.push(m[2]!);
       const py = /^\s*(?:async\s+)?def\s+(test_\w+)/.exec(l); if (py) titles.push(py[1]!);
       const go = /^\s*func\s+(Test\w+)\s*\(/.exec(l); if (go) titles.push(go[1]!);
       if (/^\s*#\[(?:tokio::)?test\]/.test(l)) {

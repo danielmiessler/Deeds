@@ -51,17 +51,17 @@ Lead with the three totals, then the weekly trend, then the caps by name.
 
 | Error | Fix |
 |---|---|
-| `missing_key` | Deeds judges commits with Jev on the user's own Jev key, which is the only key it needs. Set `TYPESAFE_API_KEY` (get a key at https://typesafe.ai). No OpenAI or Anthropic key is required. |
+| `missing_key` | Deeds judges commits with Clef on Workers AI in the user's own Cloudflare account. Set `CLOUDFLARE_ACCOUNT_ID` and `CLOUDFLARE_API_TOKEN` (a token from the dashboard's Workers AI template, Account › Workers AI › Read and Edit). No OpenAI or Anthropic key is required. |
 | bun missing | Install it from https://bun.sh. |
 | CLI not found | Run `curl -fsSL https://raw.githubusercontent.com/danielmiessler/deeds/main/install.sh \| sh`. |
-| Key lives in a file | Point `~/.config/deeds/config.json` at it: `{ "keys": { "typesafe": { "envFile": "<path>", "var": "TYPESAFE_API_KEY" } } }`. |
+| Credentials live in a file | Point `~/.config/deeds/config.json` at it: `{ "keys": { "cloudflare": { "envFile": "<path>", "accountVar": "CLOUDFLARE_ACCOUNT_ID", "tokenVar": "CLOUDFLARE_API_TOKEN" } } }`. |
 | `sandbox_unavailable` from `extract` or `doctor` | Off macOS there is no OS sandbox. Add `--allow-unsandboxed`. |
 
 ## CLI reference
 
 ```
-deeds analyze [path | github.com/owner/repo] [--since 90d] [--until <date>] [--mode jev|full] [--vendor anthropic|openai] [--model <id>] [--html <file>] [--allow-any-output] [--color|--no-color] [--json]
-deeds analyze-many <list-file> [--since 90d] [--until <date>] [--mode jev|full] [--out <dir>] [--allow-any-output] [--json]   # one path or github.com URL per line; one report per repo plus summed totals
+deeds analyze [path | github.com/owner/repo] [--since 90d] [--until <date>] [--mode clef|full] [--vendor anthropic|openai] [--model <id>] [--html <file>] [--allow-any-output] [--color|--no-color] [--json]
+deeds analyze-many <list-file> [--since 90d] [--until <date>] [--mode clef|full] [--out <dir>] [--allow-any-output] [--json]   # one path or github.com URL per line; one report per repo plus summed totals
 deeds extract [path] [--rev <commit>] [--json]   # routes, CLI commands, UI handlers and exports
 deeds help --json                                # every command, its usage and exit codes
 deeds doctor                                     # how the no-network guarantee is enforced here
@@ -90,8 +90,8 @@ Exit codes: 0 ok, 1 error, 2 usage, 3 denied. If any commit could not be judged,
 
 ## Gotchas
 
-- **A Jev key is the only key needed.** The default judge is Jev; a 700-commit history takes well under a minute. `--mode full` is an optional slower reference read that needs an Anthropic or OpenAI key.
+- **Cloudflare credentials are all analysis needs.** The default judge is Clef on Workers AI in the user's own Cloudflare account. `--mode full` is an optional slower reference read that needs an Anthropic or OpenAI key.
 - **The text and JSON outputs differ.** Parse only `--json`. The plain-text form is for people and can change.
 - **Merge commits are counted but rarely add deeds.** A clean merge has an empty diff, so it yields no deeds and costs no model call. A merge that resolved conflicts is judged on that resolution only.
 - **Commit messages are never read.** If someone asks why "feat: X" wasn't counted as a cap, the reason is that its diff didn't add a capability.
-- **Only the diff and its changed file paths leave the machine,** and only to Jev (api.typesafe.ai), or to Anthropic or OpenAI under `--mode full`. Strings shaped like secrets are redacted first. Mention this if the user asks about privacy.
+- **Only the diff and its changed file paths leave the machine,** and only to Clef on Workers AI (api.cloudflare.com) in the user's own account, or to Anthropic or OpenAI under `--mode full`. Strings shaped like secrets are redacted first. Mention this if the user asks about privacy.
